@@ -1,0 +1,52 @@
+# cosign/policy-controller.yaml
+#
+# Sigstore Policy Controller runs as an admission webhook.
+# When a Pod is created, it checks that the image is signed by
+# your CI pipeline. Unsigned images → Pod rejected.
+#
+# Install:
+#   helm repo add sigstore https://sigstore.github.io/helm-charts
+#   helm upgrade --install policy-controller sigstore/policy-controller \
+#     --namespace cosign-system --create-namespace
+
+# ClusterImagePolicy — enforces signing for all images in prod namespace
+apiVersion: policy.sigstore.dev/v1beta1
+kind: ClusterImagePolicy
+metadata:
+  name: require-signed-images
+spec:
+  # Match ALL images in prod — any image without a valid signature is rejected
+  images:
+    - glob: "**"    # match any image
+
+  # Only enforce in prod — dev/staging can use unsigned images
+  # (Achieved via namespace selector on the webhook configuration)
+
+  authorities:
+    - keyless:
+        # Images must be signed via GitHub Actions OIDC
+        identities:
+          - issuer: https://token.actions.githubusercontent.com
+            # Restrict to your specific org/repo and the CI workflow
+            subjectRegExp: "https://github.com/your-org/your-repo/.github/workflows/.*"
+        # Trust root: Sigstore's public Fulcio CA
+        url: https://fulcio.sigstore.dev
+
+    # Also accept images signed with an explicit key (for emergency manual deploys)
+    - key:
+        secretRef:
+          name: cosign-pub-key
+          namespace: cosign-system
+---
+# Kubernetes Secret containing the public key for manual signing
+# Create with: kubectl create secret generic cosign-pub-key \
+#   --from-file=cosign.pub=./cosign.pub \
+#   -n cosign-system
+apiVersion: v1
+kind: Secret
+metadata:
+  name: cosign-pub-key
+  namespace: cosign-system
+type: Opaque
+# data.cosign.pub: <base64 encoded public key>
+# Generate key pair: cosign generate-key-pair

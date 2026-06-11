@@ -1,0 +1,134 @@
+# opentelemetry/otel-collector.yaml
+#
+# OpenTelemetry Collector receives traces/metrics/logs from all services,
+# processes them, and exports to Jaeger (traces) + Prometheus (metrics).
+#
+# ── What is distributed tracing? ─────────────────────────────────────────
+# When a GraphQL query hits the BFF, it fans out to 3 services.
+# A trace connects all those spans into one waterfall view:
+#
+#   [BFF] POST /graphql  200ms
+#     ├── [go-auth]      validate token     12ms
+#     ├── [java-inventory] GET /products    45ms
+#     └── [nodejs-notification] list       38ms
+#
+# Without tracing, you'd need to correlate logs across 4 services manually.
+# With tracing, one trace ID shows you the entire request path.
+#
+# Install:
+#   helm repo add open-telemetry https://open-telemetry.github.io/opentelemetry-helm-charts
+#   helm upgrade --install otel-collector open-telemetry/opentelemetry-collector \
+#     --namespace monitoring \
+#     --values opentelemetry/otel-collector.yaml
+
+mode: deployment
+replicaCount: 2
+
+config:
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+          endpoint: 0.0.0.0:4317   # gRPC — used by most OTEL SDKs
+        http:
+          endpoint: 0.0.0.0:4318   # HTTP — used by browsers, some SDKs
+
+    # Receive Prometheus metrics from services that use /metrics
+    prometheus:
+      config:
+        scrape_configs:
+          - job_name: otel-collector-self
+            static_configs:
+              - targets: ["localhost:8888"]
+
+    # Receive Kubernetes events
+    k8s_events:
+      namespaces: [prod, staging, dev]
+
+  processors:
+    # Add Kubernetes metadata to every span/metric/log
+    k8sattributes:
+      auth_type: serviceAccount
+      passthrough: false
+      extract:
+        metadata:
+          - k8s.namespace.name
+          - k8s.pod.name
+          - k8s.pod.uid
+          - k8s.deployment.name
+          - k8s.node.name
+          - k8s.container.name
+
+    # Batch spans before export (reduces network overhead)
+    batch:
+      timeout: 5s
+      send_batch_size: 512
+
+    # Drop health check spans — they flood traces with noise
+    filter/health:
+      spans:
+        exclude:
+          match_type: strict
+          attributes:
+            - key: http.route
+              value: "/health"
+            - key: http.route
+              value: "/actuator/health"
+
+    # Sample only 10% of successful traces (keep 100% of errors)
+    probabilistic_sampler:
+      sampling_percentage: 10
+
+    # Memory limiter — prevents OOM if ingestion spikes
+    memory_limiter:
+      check_interval: 1s
+      limit_mib: 512
+      spike_limit_mib: 128
+
+  exporters:
+    # Jaeger for distributed traces
+    otlp/jaeger:
+      endpoint: jaeger-collector.monitoring:4317
+      tls:
+        insecure: true
+
+    # Prometheus for metrics
+    prometheus:
+      endpoint: 0.0.0.0:8889
+      namespace: otel
+
+    # Loki for logs (optional)
+    loki:
+      endpoint: http://loki.monitoring:3100/loki/api/v1/push
+
+    # Debug exporter — prints to stdout in dev
+    debug:
+      verbosity: basic
+
+  service:
+    pipelines:
+      # Traces pipeline
+      traces:
+        receivers:  [otlp]
+        processors: [memory_limiter, k8sattributes, filter/health, probabilistic_sampler, batch]
+        exporters:  [otlp/jaeger]
+
+      # Metrics pipeline
+      metrics:
+        receivers:  [otlp, prometheus]
+        processors: [memory_limiter, k8sattributes, batch]
+        exporters:  [prometheus]
+
+      # Logs pipeline
+      logs:
+        receivers:  [otlp, k8s_events]
+        processors: [memory_limiter, k8sattributes, batch]
+        exporters:  [loki]
+
+resources:
+  limits:
+    cpu: 1000m
+    memory: 1Gi
+  requests:
+    cpu: 200m
+    memory: 256Mi

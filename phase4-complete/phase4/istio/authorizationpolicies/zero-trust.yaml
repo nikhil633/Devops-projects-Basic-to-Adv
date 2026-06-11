@@ -1,0 +1,151 @@
+# istio/authorizationpolicies/zero-trust.yaml
+#
+# AuthorizationPolicy = who can talk to whom inside the mesh.
+# Combined with mTLS (PeerAuthentication), this gives us zero-trust networking:
+#   Every service has a cryptographic identity (SPIFFE/X.509 cert).
+#   Every service-to-service call is authenticated AND authorised.
+#   No network path is implicitly trusted.
+#
+# Strategy applied here: DENY ALL by default, then ALLOW specific paths.
+# This is safer than allow-all + deny specific (default-deny is Zero Trust).
+
+# ── Step 1: Deny all traffic in prod by default ────────────────────────────
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: deny-all
+  namespace: prod
+spec:
+  {}   # empty spec = deny all (no rules = no allow)
+---
+# ── Step 2: Allow ingress gateway → BFF ──────────────────────────────────
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-ingress-to-bff
+  namespace: prod
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: nodejs-bff-gateway
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              # SPIFFE identity of the Istio ingress gateway
+              - "cluster.local/ns/istio-system/sa/istio-ingressgateway-service-account"
+      to:
+        - operation:
+            ports: ["4000"]
+---
+# ── Step 3: Allow BFF → each upstream service ─────────────────────────────
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-bff-to-auth
+  namespace: prod
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: go-auth
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - "cluster.local/ns/prod/sa/nodejs-bff-gateway"
+      to:
+        - operation:
+            methods: ["POST"]
+            paths: ["/auth/login", "/auth/refresh", "/auth/validate", "/auth/logout"]
+---
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-bff-to-inventory
+  namespace: prod
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: java-inventory
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - "cluster.local/ns/prod/sa/nodejs-bff-gateway"
+      to:
+        - operation:
+            methods: ["GET", "POST", "PUT", "PATCH", "DELETE"]
+            paths: ["/api/products*"]
+---
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-bff-to-notification
+  namespace: prod
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: nodejs-notification
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - "cluster.local/ns/prod/sa/nodejs-bff-gateway"
+      to:
+        - operation:
+            methods: ["POST", "GET"]
+---
+# ── Step 4: Allow all services → rate limiter ──────────────────────────────
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-all-to-ratelimiter
+  namespace: prod
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: rust-ratelimiter
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            namespaces: ["prod"]    # any service in prod can call rate limiter
+      to:
+        - operation:
+            methods: ["POST"]
+            paths: ["/check"]
+---
+# ── Step 5: Allow Prometheus scraping from monitoring namespace ────────────
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-prometheus-scrape
+  namespace: prod
+spec:
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            namespaces: ["monitoring"]
+      to:
+        - operation:
+            paths: ["/metrics"]
+            methods: ["GET"]
+---
+# ── Step 6: Allow health checks from kubelet ──────────────────────────────
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-health-checks
+  namespace: prod
+spec:
+  action: ALLOW
+  rules:
+    - to:
+        - operation:
+            paths: ["/health", "/actuator/health"]
+            methods: ["GET"]

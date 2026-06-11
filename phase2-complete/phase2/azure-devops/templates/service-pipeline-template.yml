@@ -1,0 +1,337 @@
+# azure-devops/templates/service-pipeline-template.yml
+# Reusable pipeline template — called by all 4 remaining service pipelines.
+# In Azure DevOps, templates replace copy-paste the same way reusable
+# workflows do in GitHub Actions.
+#
+# Usage in a service pipeline:
+#   stages:
+#     - template: templates/service-pipeline-template.yml
+#       parameters:
+#         service: nodejs-notification
+#         dockerfile: phase2/dockerfiles/nodejs/Dockerfile
+#         buildContext: nodejs-notification
+#         port: "3000"
+
+parameters:
+  - name: service
+    type: string
+  - name: dockerfile
+    type: string
+  - name: buildContext
+    type: string
+  - name: port
+    type: string
+  - name: testCommand
+    type: string
+    default: ""
+
+stages:
+  # ── Stage 1: Test ──────────────────────────────────────────────────────────
+  - stage: Test
+    displayName: "Test — ${{ parameters.service }}"
+    jobs:
+      - job: RunTests
+        pool:
+          vmImage: ubuntu-latest
+        steps:
+          - checkout: self
+
+          - script: |
+              cd ${{ parameters.buildContext }}
+              # Auto-detect language and run tests
+              if [ -n "${{ parameters.testCommand }}" ]; then
+                ${{ parameters.testCommand }}
+              elif [ -f "package.json" ]; then
+                npm ci && npm test -- --reporters=jest-junit
+              elif [ -f "go.mod" ]; then
+                go test ./... -v -race -json | tee test-output.json
+                go install github.com/jstemmer/go-junit-report/v2@latest
+                go-junit-report -in test-output.json -out test-results.xml
+              elif [ -f "Cargo.toml" ]; then
+                cargo test -- -Z unstable-options --format junit > test-results.xml 2>&1 || true
+                cargo test
+              elif [ -f "pom.xml" ]; then
+                ./mvnw test -q
+              fi
+            displayName: "Run tests"
+
+          - task: PublishTestResults@2
+            inputs:
+              testResultsFormat: JUnit
+              testResultsFiles: "**/test-results.xml"
+            condition: always()
+            displayName: "Publish test results"
+
+  # ── Stage 2: Build → Scan → Push ──────────────────────────────────────────
+  - stage: Build
+    displayName: "Build → Scan → Push — ${{ parameters.service }}"
+    dependsOn: Test
+    condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest'))
+    jobs:
+
+      # Job A: ACR (Azure)
+      - job: BuildACR
+        displayName: "Push to ACR"
+        pool:
+          vmImage: ubuntu-latest
+        variables:
+          - group: dev-secrets
+        steps:
+          - checkout: self
+
+          - task: Docker@2
+            displayName: "Login to ACR"
+            inputs:
+              command: login
+              containerRegistry: acr-service-connection
+
+          - task: Docker@2
+            displayName: "Build and push"
+            inputs:
+              command: buildAndPush
+              repository: ${{ parameters.service }}
+              dockerfile: ${{ parameters.dockerfile }}
+              buildContext: ${{ parameters.buildContext }}
+              containerRegistry: acr-service-connection
+              tags: |
+                sha-$(Build.SourceVersion)
+                latest
+
+          - script: |
+              docker run --rm \
+                -v /var/run/docker.sock:/var/run/docker.sock \
+                aquasec/trivy:latest image \
+                --severity CRITICAL,HIGH \
+                --exit-code 1 \
+                --no-progress \
+                $(ACR_LOGIN_SERVER)/${{ parameters.service }}:sha-$(Build.SourceVersion)
+            displayName: "Trivy scan"
+
+      # Job B: ECR (AWS)
+      - job: BuildECR
+        displayName: "Push to ECR"
+        pool:
+          vmImage: ubuntu-latest
+        variables:
+          - group: dev-secrets
+        steps:
+          - checkout: self
+
+          - task: AWSShellScript@1
+            displayName: "ECR login, build, push"
+            inputs:
+              awsCredentials: aws-service-connection
+              regionName: us-east-1
+              scriptType: inline
+              inlineScript: |
+                set -euo pipefail
+                ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
+                REGISTRY="${ACCOUNT}.dkr.ecr.us-east-1.amazonaws.com"
+                IMAGE="${REGISTRY}/$(VAR_PROJECT)/dev/${{ parameters.service }}:sha-$(Build.SourceVersion)"
+
+                aws ecr get-login-password --region us-east-1 | \
+                  docker login --username AWS --password-stdin "${REGISTRY}"
+
+                docker build -t "${IMAGE}" \
+                  -f ${{ parameters.dockerfile }} \
+                  ${{ parameters.buildContext }}
+
+                docker push "${IMAGE}"
+
+                # Trivy scan
+                docker run --rm \
+                  -v /var/run/docker.sock:/var/run/docker.sock \
+                  aquasec/trivy:latest image \
+                  --severity CRITICAL,HIGH \
+                  --exit-code 1 \
+                  "${IMAGE}"
+
+  # ── Stage 3: Deploy to Dev ─────────────────────────────────────────────────
+  - stage: DeployDev
+    displayName: "Deploy → Dev — ${{ parameters.service }}"
+    dependsOn: Build
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+    jobs:
+
+      - deployment: AKSDev
+        displayName: "AKS dev"
+        pool:
+          vmImage: ubuntu-latest
+        environment: dev
+        variables:
+          - group: dev-secrets
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+
+                - task: AzureCLI@2
+                  displayName: "Get AKS credentials"
+                  inputs:
+                    azureSubscription: azure-service-connection
+                    scriptType: bash
+                    scriptLocation: inlineScript
+                    inlineScript: |
+                      az aks get-credentials \
+                        --resource-group $(AKS_RESOURCE_GROUP_DEV) \
+                        --name $(AKS_CLUSTER_NAME_DEV) \
+                        --overwrite-existing
+
+                - task: HelmDeploy@0
+                  displayName: "Helm upgrade — AKS dev"
+                  inputs:
+                    connectionType: None
+                    command: upgrade
+                    chartType: FilePath
+                    chartPath: phase2/helm/charts/${{ parameters.service }}
+                    releaseName: ${{ parameters.service }}
+                    namespace: dev
+                    install: true
+                    waitForExecution: true
+                    valueFile: |
+                      phase2/helm/charts/${{ parameters.service }}/values.yaml
+                      phase2/helm/charts/${{ parameters.service }}/values-dev.yaml
+                    overrideValues: |
+                      image.repository=$(ACR_LOGIN_SERVER)/${{ parameters.service }}
+                      image.tag=sha-$(Build.SourceVersion)
+                      ingress.className=azure/application-gateway
+                    arguments: "--atomic --timeout 5m"
+
+      - deployment: EKSDev
+        displayName: "EKS dev"
+        pool:
+          vmImage: ubuntu-latest
+        environment: dev
+        variables:
+          - group: dev-secrets
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+
+                - task: AWSShellScript@1
+                  displayName: "Get EKS credentials"
+                  inputs:
+                    awsCredentials: aws-service-connection
+                    regionName: us-east-1
+                    scriptType: inline
+                    inlineScript: |
+                      aws eks update-kubeconfig \
+                        --region us-east-1 \
+                        --name $(EKS_CLUSTER_NAME_DEV)
+
+                - task: HelmDeploy@0
+                  displayName: "Helm upgrade — EKS dev"
+                  inputs:
+                    connectionType: None
+                    command: upgrade
+                    chartType: FilePath
+                    chartPath: phase2/helm/charts/${{ parameters.service }}
+                    releaseName: ${{ parameters.service }}
+                    namespace: dev
+                    install: true
+                    waitForExecution: true
+                    valueFile: |
+                      phase2/helm/charts/${{ parameters.service }}/values.yaml
+                      phase2/helm/charts/${{ parameters.service }}/values-dev.yaml
+                    overrideValues: |
+                      image.repository=$(ECR_REGISTRY)/$(VAR_PROJECT)/dev/${{ parameters.service }}
+                      image.tag=sha-$(Build.SourceVersion)
+                    arguments: "--atomic --timeout 5m"
+
+  # ── Stage 4: Deploy to Prod (approval gate) ────────────────────────────────
+  - stage: DeployProd
+    displayName: "Deploy → Prod — ${{ parameters.service }}"
+    dependsOn: DeployDev
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+    jobs:
+
+      - deployment: AKSProd
+        displayName: "AKS prod"
+        pool:
+          vmImage: ubuntu-latest
+        environment: prod          # approval gate configured here in Azure DevOps
+        variables:
+          - group: prod-secrets
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+
+                - task: AzureCLI@2
+                  displayName: "Get AKS prod credentials"
+                  inputs:
+                    azureSubscription: azure-service-connection-prod
+                    scriptType: bash
+                    scriptLocation: inlineScript
+                    inlineScript: |
+                      az aks get-credentials \
+                        --resource-group $(AKS_RESOURCE_GROUP_PROD) \
+                        --name $(AKS_CLUSTER_NAME_PROD) \
+                        --overwrite-existing
+
+                - task: HelmDeploy@0
+                  displayName: "Helm upgrade — AKS prod"
+                  inputs:
+                    connectionType: None
+                    command: upgrade
+                    chartType: FilePath
+                    chartPath: phase2/helm/charts/${{ parameters.service }}
+                    releaseName: ${{ parameters.service }}
+                    namespace: prod
+                    install: true
+                    waitForExecution: true
+                    valueFile: |
+                      phase2/helm/charts/${{ parameters.service }}/values.yaml
+                      phase2/helm/charts/${{ parameters.service }}/values-prod.yaml
+                    overrideValues: |
+                      image.repository=$(ACR_LOGIN_SERVER_PROD)/${{ parameters.service }}
+                      image.tag=sha-$(Build.SourceVersion)
+                      ingress.className=azure/application-gateway
+                    arguments: "--atomic --timeout 10m"
+
+      - deployment: EKSProd
+        displayName: "EKS prod"
+        pool:
+          vmImage: ubuntu-latest
+        environment: prod
+        variables:
+          - group: prod-secrets
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+
+                - task: AWSShellScript@1
+                  displayName: "Get EKS prod credentials"
+                  inputs:
+                    awsCredentials: aws-service-connection-prod
+                    regionName: us-east-1
+                    scriptType: inline
+                    inlineScript: |
+                      aws eks update-kubeconfig \
+                        --region us-east-1 \
+                        --name $(EKS_CLUSTER_NAME_PROD)
+
+                - task: HelmDeploy@0
+                  displayName: "Helm upgrade — EKS prod"
+                  inputs:
+                    connectionType: None
+                    command: upgrade
+                    chartType: FilePath
+                    chartPath: phase2/helm/charts/${{ parameters.service }}
+                    releaseName: ${{ parameters.service }}
+                    namespace: prod
+                    install: true
+                    waitForExecution: true
+                    valueFile: |
+                      phase2/helm/charts/${{ parameters.service }}/values.yaml
+                      phase2/helm/charts/${{ parameters.service }}/values-prod.yaml
+                    overrideValues: |
+                      image.repository=$(ECR_REGISTRY)/$(VAR_PROJECT)/prod/${{ parameters.service }}
+                      image.tag=sha-$(Build.SourceVersion)
+                    arguments: "--atomic --timeout 10m"

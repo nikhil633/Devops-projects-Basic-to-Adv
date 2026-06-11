@@ -1,0 +1,14 @@
+# azure-devops/java-inventory.yml
+trigger:
+  branches:
+    include: [main, "release/*"]
+  paths:
+    include: ["java-inventory/*"]
+stages:
+  - template: templates/service-pipeline-template.yml
+    parameters:
+      service: java-inventory
+      dockerfile: phase2/dockerfiles/java/Dockerfile
+      buildContext: java-inventory
+      port: "8080"
+      testCommand: "cd java-inventory && ./mvnw test -q"

@@ -1,0 +1,112 @@
+# ============================================================
+# Universal .dockerignore
+# Copy this to your project root as .dockerignore
+# Add language-specific sections as needed
+# ============================================================
+
+# Version control
+.git
+.gitignore
+.gitattributes
+
+# Documentation
+*.md
+docs/
+LICENSE
+
+# Environment files (NEVER send secrets to build context)
+.env
+.env.*
+*.env
+secrets/
+
+# CI/CD configs (not needed in the image)
+.github/
+.gitlab-ci.yml
+.circleci/
+Jenkinsfile
+*.pipe.yml
+
+# Tests (not needed in production image)
+tests/
+test/
+spec/
+__tests__/
+*.test.*
+*.spec.*
+coverage/
+.nyc_output/
+
+# Editor / IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# ── Node.js ───────────────────────────────────────────────
+node_modules/
+npm-debug.log
+yarn-debug.log
+yarn-error.log
+.npm
+.yarn
+dist/           # compiled output (builder stage handles this)
+
+# ── Python ────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.tox/
+venv/
+.venv/
+env/
+*.egg-info/
+dist/
+build/
+*.pyc
+
+# ── Java / Kotlin / Scala ─────────────────────────────────
+target/
+build/
+*.class
+*.jar
+*.war
+.gradle/
+.mvn/
+
+# ── Go ────────────────────────────────────────────────────
+vendor/         # if not using vendor mode
+bin/
+*.exe
+
+# ── Rust ──────────────────────────────────────────────────
+target/         # cargo build output (HUGE — never send this)
+*.rlib
+
+# ── Ruby ──────────────────────────────────────────────────
+.bundle/
+vendor/bundle/
+tmp/
+log/
+
+# ── PHP ───────────────────────────────────────────────────
+vendor/         # if using separate composer stage
+.phpunit.cache/
+
+# ── .NET ──────────────────────────────────────────────────
+bin/
+obj/
+*.user
+
+# ── Docker files themselves ───────────────────────────────
+# Exclude other Dockerfiles to keep the build context clean
+Dockerfile*
+docker-compose*

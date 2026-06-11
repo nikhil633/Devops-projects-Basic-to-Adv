@@ -1,0 +1,140 @@
+# falco/falco-rules.yaml
+#
+# Falco = runtime security — detects suspicious behaviour INSIDE running containers.
+# It hooks into the Linux kernel (eBPF/syscalls) and fires alerts when
+# containers do things they shouldn't.
+#
+# ── Why runtime security? ─────────────────────────────────────────────────
+# Trivy scans images at build time — catches known CVEs.
+# OPA Gatekeeper enforces admission policies — prevents misconfigured resources.
+# Falco catches what slips through at RUNTIME:
+#   - Container trying to read /etc/shadow (credential theft)
+#   - Unexpected outbound connection (C2 beaconing)
+#   - Process spawning a shell (attacker executing commands)
+#   - File write in unexpected location (fileless malware)
+#
+# Install:
+#   helm repo add falcosecurity https://falcosecurity.github.io/charts
+#   helm upgrade --install falco falcosecurity/falco \
+#     --namespace falco --create-namespace \
+#     --set driver.kind=ebpf \
+#     --values falco/falco-values.yaml
+
+# Custom rules layered on top of Falco's default ruleset
+customRules:
+  custom-rules.yaml: |
+
+    # ── Rule 1: Shell spawned inside a service container ─────────────────
+    # Our Phase 3 services (distroless/scratch) should NEVER spawn a shell.
+    # If this fires → an attacker has achieved code execution.
+    - rule: Shell Spawned in Service Container
+      desc: A shell was spawned inside one of our production service containers
+      condition: >
+        spawned_process and
+        container and
+        (proc.name in (shell_binaries)) and
+        container.image.repository in (
+          "python-ml-inference",
+          "rust-realtime-chat",
+          "go-order-saga",
+          "java-event-sourcing",
+          "nodejs-bff-gateway"
+        )
+      output: >
+        Shell spawned in production container
+        (user=%user.name command=%proc.cmdline
+         container=%container.name image=%container.image.repository)
+      priority: CRITICAL
+      tags: [shell, attack, container]
+
+    # ── Rule 2: Unexpected outbound network connection ────────────────────
+    # Our services should only connect to Redis, Kafka, PostgreSQL, and each other.
+    # Any other outbound connection is suspicious.
+    - rule: Unexpected Outbound Connection
+      desc: Container made network connection to unexpected destination
+      condition: >
+        outbound and
+        container and
+        not proc.name in (known_network_processes) and
+        not fd.sip in (allowed_ips) and
+        container.image.repository in (
+          "python-ml-inference",
+          "go-order-saga"
+        )
+      output: >
+        Unexpected outbound connection from container
+        (command=%proc.cmdline connection=%fd.name
+         container=%container.name)
+      priority: WARNING
+      tags: [network, suspicious]
+
+    # ── Rule 3: Sensitive file read ────────────────────────────────────────
+    # No service should read /etc/shadow, /proc/*/mem, or SSH keys.
+    - rule: Sensitive File Read in Container
+      desc: Container attempted to read sensitive system file
+      condition: >
+        open_read and
+        container and
+        (fd.name startswith /etc/shadow or
+         fd.name startswith /etc/passwd or
+         fd.name startswith /root/.ssh or
+         fd.name startswith /proc/*/mem)
+      output: >
+        Sensitive file read in container
+        (user=%user.name file=%fd.name
+         command=%proc.cmdline container=%container.name)
+      priority: ERROR
+      tags: [file, sensitive, attack]
+
+    # ── Rule 4: Package manager executed ─────────────────────────────────
+    # No container should run apt, pip, npm, yum at runtime.
+    # These are build-time tools. If they run at runtime → supply chain attack.
+    - rule: Package Manager Executed in Container
+      desc: A package manager was run inside a production container
+      condition: >
+        spawned_process and
+        container and
+        proc.name in (package_mgmt_binaries)
+      output: >
+        Package manager executed inside container
+        (user=%user.name command=%proc.cmdline
+         container=%container.name image=%container.image.repository)
+      priority: ERROR
+      tags: [process, supply-chain]
+
+    # ── Rule 5: Crypto mining detected ───────────────────────────────────
+    - rule: Crypto Mining Process Detected
+      desc: A process associated with cryptocurrency mining was detected
+      condition: >
+        spawned_process and
+        container and
+        (proc.name in (crypto_miners) or
+         proc.cmdline contains "--stratum" or
+         proc.cmdline contains "xmrig" or
+         proc.cmdline contains "minerd")
+      output: >
+        Crypto mining process detected
+        (command=%proc.cmdline container=%container.name)
+      priority: CRITICAL
+      tags: [crypto-mining, attack]
+
+# Falco configuration values
+falco:
+  grpc:
+    enabled: true
+  grpcOutput:
+    enabled: true
+  jsonOutput: true
+  logLevel: info
+
+  # Send alerts to Falcosidekick → Slack/PagerDuty
+  sidekick:
+    enabled: true
+    config:
+      slack:
+        webhookurl: "https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK"
+        channel: "#security-alerts"
+        minimumpriority: "warning"
+      pagerduty:
+        routingKey: "YOUR_PAGERDUTY_KEY"
+        minimumpriority: "critical"

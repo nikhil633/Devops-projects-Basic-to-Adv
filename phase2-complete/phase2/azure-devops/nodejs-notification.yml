@@ -1,0 +1,13 @@
+# azure-devops/nodejs-notification.yml
+trigger:
+  branches:
+    include: [main, "release/*"]
+  paths:
+    include: ["nodejs-notification/*"]
+stages:
+  - template: templates/service-pipeline-template.yml
+    parameters:
+      service: nodejs-notification
+      dockerfile: phase2/dockerfiles/nodejs/Dockerfile
+      buildContext: nodejs-notification
+      port: "3000"

@@ -1,0 +1,146 @@
+# istio/destinationrules/all-services.yaml
+#
+# DestinationRule = policies applied AFTER routing (to the destination).
+# Defines: circuit breaking, load balancing algorithm, connection pool limits,
+#          outlier detection (auto-eject failing instances from load balancer).
+#
+# Circuit breaking is one of the most important resilience patterns:
+#   Instead of waiting for a slow/failing service to respond (causing cascades),
+#   the circuit breaker opens after N failures and immediately returns an error.
+#   After a cooldown it lets a test request through (half-open state).
+#   If it succeeds, the circuit closes and traffic resumes normally.
+
+# ── BFF Gateway ─────────────────────────────────────────────────────────────
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: bff-gateway
+  namespace: prod
+spec:
+  host: nodejs-bff-gateway
+  trafficPolicy:
+    connectionPool:
+      tcp:
+        maxConnections: 1000
+      http:
+        http1MaxPendingRequests: 100
+        http2MaxRequests: 1000
+        maxRequestsPerConnection: 10
+    loadBalancer:
+      simple: LEAST_CONN       # route to the instance with fewest active requests
+    outlierDetection:
+      consecutive5xxErrors: 5  # eject after 5 consecutive 5xx
+      interval: 30s
+      baseEjectionTime: 30s    # keep ejected for 30s
+      maxEjectionPercent: 50   # never eject more than 50% of instances
+---
+# ── Go Auth ─────────────────────────────────────────────────────────────────
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: go-auth
+  namespace: prod
+spec:
+  host: go-auth
+  trafficPolicy:
+    connectionPool:
+      http:
+        http1MaxPendingRequests: 50
+        http2MaxRequests: 200
+    loadBalancer:
+      simple: ROUND_ROBIN
+    outlierDetection:
+      consecutive5xxErrors: 3
+      interval: 10s
+      baseEjectionTime: 30s
+      maxEjectionPercent: 33
+---
+# ── Java Inventory ──────────────────────────────────────────────────────────
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: java-inventory
+  namespace: prod
+spec:
+  host: java-inventory
+  trafficPolicy:
+    connectionPool:
+      tcp:
+        maxConnections: 200
+        connectTimeout: 3s
+      http:
+        http1MaxPendingRequests: 50
+        http2MaxRequests: 200
+        idleTimeout: 90s
+    loadBalancer:
+      simple: LEAST_CONN
+    outlierDetection:
+      consecutive5xxErrors: 5
+      interval: 30s
+      baseEjectionTime: 60s
+      maxEjectionPercent: 33
+---
+# ── Rust Rate Limiter ───────────────────────────────────────────────────────
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: rust-ratelimiter
+  namespace: prod
+spec:
+  host: rust-ratelimiter
+  trafficPolicy:
+    connectionPool:
+      tcp:
+        maxConnections: 500
+        connectTimeout: 1s
+      http:
+        http2MaxRequests: 2000
+    loadBalancer:
+      simple: ROUND_ROBIN
+    outlierDetection:
+      consecutive5xxErrors: 3
+      interval: 10s
+      baseEjectionTime: 15s
+      maxEjectionPercent: 50
+---
+# ── Python ML Inference ─────────────────────────────────────────────────────
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: python-ml-inference
+  namespace: prod
+spec:
+  host: python-ml-inference
+  trafficPolicy:
+    connectionPool:
+      http:
+        http1MaxPendingRequests: 20   # ML inference is CPU-bound — limit queue
+        http2MaxRequests: 50
+    loadBalancer:
+      simple: LEAST_CONN             # always send to least busy ML pod
+    outlierDetection:
+      consecutive5xxErrors: 3
+      interval: 30s
+      baseEjectionTime: 60s
+      maxEjectionPercent: 50
+---
+# ── Java Event Sourcing ─────────────────────────────────────────────────────
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: java-event-sourcing
+  namespace: prod
+spec:
+  host: java-event-sourcing
+  trafficPolicy:
+    connectionPool:
+      http:
+        http1MaxPendingRequests: 50
+        http2MaxRequests: 200
+    loadBalancer:
+      simple: ROUND_ROBIN
+    outlierDetection:
+      consecutive5xxErrors: 5
+      interval: 30s
+      baseEjectionTime: 60s
+      maxEjectionPercent: 33

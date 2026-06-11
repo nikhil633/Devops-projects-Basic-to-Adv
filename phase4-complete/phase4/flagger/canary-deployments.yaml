@@ -1,0 +1,253 @@
+# flagger/canary-deployments.yaml
+#
+# Flagger automates canary deployments using Istio traffic weights.
+#
+# ── How Flagger canary works ──────────────────────────────────────────────
+#
+# You deploy a new image to the Deployment as normal.
+# Flagger detects the image change and starts the canary:
+#
+# Step 1: Route 5% traffic to new version, 95% to stable
+# Step 2: Wait INTERVAL, check metrics (error rate, latency)
+# Step 3: If metrics are healthy → promote weight by STEP (e.g. 5→10→15→20%)
+# Step 4: If metrics breach thresholds → auto-rollback to stable, fire alert
+# Step 5: If 100% weight reached successfully → stable = new version
+#
+# Zero manual intervention needed. No downtime. Automatic rollback on failure.
+#
+# Install Flagger:
+#   helm repo add flagger https://flagger.app
+#   helm upgrade --install flagger flagger/flagger \
+#     --namespace istio-system \
+#     --set meshProvider=istio \
+#     --set metricsServer=http://prometheus:9090
+
+# ── BFF Gateway Canary ────────────────────────────────────────────────────
+apiVersion: flagger.app/v1beta1
+kind: Canary
+metadata:
+  name: nodejs-bff-gateway
+  namespace: prod
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: nodejs-bff-gateway
+
+  progressDeadlineSeconds: 600    # abort if not promoted within 10 min
+
+  service:
+    port: 4000
+    targetPort: 4000
+    gateways:
+      - istio-system/main-gateway
+    hosts:
+      - api.example.com
+
+  analysis:
+    interval: 1m              # check metrics every 1 minute
+    threshold: 5              # fail after 5 consecutive metric failures
+    maxWeight: 50             # never send more than 50% to canary
+    stepWeight: 10            # increase by 10% each iteration
+
+    # ── Success metrics — canary is promoted only if ALL pass ───────────
+    metrics:
+      - name: request-success-rate
+        # Flagger built-in: Prometheus query for HTTP success rate
+        thresholdRange:
+          min: 99             # must have ≥99% success rate
+        interval: 1m
+
+      - name: request-duration
+        # P99 latency must stay below 500ms
+        thresholdRange:
+          max: 500
+        interval: 1m
+
+    # ── Webhooks — run load tests during canary ─────────────────────────
+    webhooks:
+      - name: load-test
+        type: rollout
+        url: http://flagger-loadtester.test/
+        timeout: 5s
+        metadata:
+          cmd: >
+            hey -z 1m -q 10 -c 2
+            http://nodejs-bff-gateway-canary.prod:4000/graphql
+            -m POST
+            -H "Content-Type: application/json"
+            -d '{"query":"{ products { id name } }"}'
+
+      - name: acceptance-test
+        type: pre-rollout
+        url: http://flagger-loadtester.test/
+        timeout: 30s
+        metadata:
+          cmd: >
+            curl -sf
+            http://nodejs-bff-gateway-canary.prod:4000/health
+
+    # ── Alerts on promotion/rollback ────────────────────────────────────
+    alerts:
+      - name: slack
+        severity: info
+        providerRef:
+          name: slack
+          namespace: istio-system
+---
+# ── Go Auth Canary ────────────────────────────────────────────────────────
+apiVersion: flagger.app/v1beta1
+kind: Canary
+metadata:
+  name: go-auth
+  namespace: prod
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: go-auth
+  progressDeadlineSeconds: 300
+  service:
+    port: 8080
+    targetPort: 8080
+  analysis:
+    interval: 1m
+    threshold: 3
+    maxWeight: 50
+    stepWeight: 10
+    metrics:
+      - name: request-success-rate
+        thresholdRange:
+          min: 99.5           # auth must be highly reliable
+        interval: 1m
+      - name: request-duration
+        thresholdRange:
+          max: 200            # auth calls must be fast
+        interval: 1m
+    webhooks:
+      - name: acceptance-test
+        type: pre-rollout
+        url: http://flagger-loadtester.test/
+        timeout: 30s
+        metadata:
+          cmd: >
+            curl -sf
+            -X POST http://go-auth-canary.prod:8080/auth/login
+            -H "Content-Type: application/json"
+            -d '{"username":"admin","password":"password"}'
+---
+# ── Java Inventory Canary ─────────────────────────────────────────────────
+apiVersion: flagger.app/v1beta1
+kind: Canary
+metadata:
+  name: java-inventory
+  namespace: prod
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: java-inventory
+  progressDeadlineSeconds: 600
+  service:
+    port: 8080
+    targetPort: 8080
+  analysis:
+    interval: 2m
+    threshold: 5
+    maxWeight: 50
+    stepWeight: 10
+    metrics:
+      - name: request-success-rate
+        thresholdRange:
+          min: 99
+        interval: 2m
+      - name: request-duration
+        thresholdRange:
+          max: 1000
+        interval: 2m
+    webhooks:
+      - name: load-test
+        type: rollout
+        url: http://flagger-loadtester.test/
+        timeout: 5s
+        metadata:
+          cmd: >
+            hey -z 2m -q 5 -c 2
+            http://java-inventory-canary.prod:8080/api/products
+---
+# ── Python ML Inference Canary ────────────────────────────────────────────
+apiVersion: flagger.app/v1beta1
+kind: Canary
+metadata:
+  name: python-ml-inference
+  namespace: prod
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: python-ml-inference
+  progressDeadlineSeconds: 600
+  service:
+    port: 8100
+    targetPort: 8100
+  analysis:
+    interval: 2m
+    threshold: 3
+    maxWeight: 30             # conservative — ML models need careful validation
+    stepWeight: 5
+    metrics:
+      - name: request-success-rate
+        thresholdRange:
+          min: 98
+        interval: 2m
+      - name: request-duration
+        thresholdRange:
+          max: 5000           # ML inference can be slow — 5s P99 threshold
+        interval: 2m
+      # Custom metric: inference batch size should be healthy
+      - name: ml-inference-batch-size
+        templateRef:
+          name: ml-batch-size
+          namespace: prod
+        thresholdRange:
+          min: 1
+        interval: 2m
+    webhooks:
+      - name: acceptance-test
+        type: pre-rollout
+        url: http://flagger-loadtester.test/
+        timeout: 30s
+        metadata:
+          cmd: >
+            curl -sf
+            -X POST http://python-ml-inference-canary.prod:8100/predict
+            -H "Content-Type: application/json"
+            -d '{"inputs":[1.0,2.0,3.0,4.0]}'
+---
+# Custom MetricTemplate for ML batch size
+apiVersion: flagger.app/v1beta1
+kind: MetricTemplate
+metadata:
+  name: ml-batch-size
+  namespace: prod
+spec:
+  provider:
+    type: prometheus
+    address: http://prometheus.monitoring:9090
+  query: |
+    avg(ml_batch_size_sum / ml_batch_size_count{
+      namespace="{{ namespace }}",
+      pod=~"{{ target }}-[0-9a-zA-Z]+(-[0-9a-zA-Z]+)"
+    })
+---
+# ── Flagger Slack Alert Provider ─────────────────────────────────────────
+apiVersion: notification.toolkit.fluxcd.io/v1beta1
+kind: Provider
+metadata:
+  name: slack
+  namespace: istio-system
+spec:
+  type: slack
+  channel: "#deployments"
+  secretRef:
+    name: slack-webhook-secret

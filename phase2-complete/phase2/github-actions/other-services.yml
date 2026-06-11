@@ -1,0 +1,67 @@
+# github-actions/nodejs-notification.yml
+name: nodejs-notification
+on:
+  push:
+    branches: [main, "release/**"]
+    paths: ["nodejs-notification/**"]
+  workflow_dispatch:
+jobs:
+  pipeline:
+    uses: ./.github/workflows/reusable-service-pipeline.yml
+    with:
+      service: nodejs-notification
+      context: nodejs-notification
+      dockerfile: phase2/dockerfiles/nodejs/Dockerfile
+      port: "3000"
+    secrets: inherit
+---
+# github-actions/go-auth.yml
+name: go-auth
+on:
+  push:
+    branches: [main, "release/**"]
+    paths: ["go-auth/**"]
+  workflow_dispatch:
+jobs:
+  pipeline:
+    uses: ./.github/workflows/reusable-service-pipeline.yml
+    with:
+      service: go-auth
+      context: go-auth
+      dockerfile: phase2/dockerfiles/go/Dockerfile
+      port: "8080"
+    secrets: inherit
+---
+# github-actions/rust-ratelimiter.yml
+name: rust-ratelimiter
+on:
+  push:
+    branches: [main, "release/**"]
+    paths: ["rust-ratelimiter/**"]
+  workflow_dispatch:
+jobs:
+  pipeline:
+    uses: ./.github/workflows/reusable-service-pipeline.yml
+    with:
+      service: rust-ratelimiter
+      context: rust-ratelimiter
+      dockerfile: phase2/dockerfiles/rust/Dockerfile
+      port: "9000"
+    secrets: inherit
+---
+# github-actions/java-inventory.yml
+name: java-inventory
+on:
+  push:
+    branches: [main, "release/**"]
+    paths: ["java-inventory/**"]
+  workflow_dispatch:
+jobs:
+  pipeline:
+    uses: ./.github/workflows/reusable-service-pipeline.yml
+    with:
+      service: java-inventory
+      context: java-inventory
+      dockerfile: phase2/dockerfiles/java/Dockerfile
+      port: "8080"
+    secrets: inherit

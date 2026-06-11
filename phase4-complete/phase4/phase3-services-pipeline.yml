@@ -1,0 +1,223 @@
+# .github/workflows/phase3-services-pipeline.yml
+# Full CI/CD for all Phase 3 services with Cosign image signing.
+# Adds supply chain security on top of the Phase 2 pipeline pattern.
+
+name: Phase 3 Services Pipeline
+
+on:
+  push:
+    branches: [main, "release/**"]
+    paths:
+      - "rust-realtime-chat/**"
+      - "python-ml-inference/**"
+      - "java-event-sourcing/**"
+      - "nodejs-bff-gateway/**"
+      - "go-order-saga/**"
+  workflow_dispatch:
+    inputs:
+      service:
+        description: "Service to deploy"
+        required: true
+        type: choice
+        options:
+          - rust-realtime-chat
+          - python-ml-inference
+          - java-event-sourcing
+          - nodejs-bff-gateway
+          - go-order-saga
+
+jobs:
+  # ── Detect changed services ────────────────────────────────────────────
+  detect-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      services: ${{ steps.changes.outputs.services }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Detect changed services
+        id: changes
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "services=[\"${{ github.event.inputs.service }}\"]" >> $GITHUB_OUTPUT
+          else
+            SERVICES=()
+            for svc in rust-realtime-chat python-ml-inference java-event-sourcing nodejs-bff-gateway go-order-saga; do
+              if git diff --name-only HEAD~1 HEAD | grep -q "^${svc}/"; then
+                SERVICES+=("\"${svc}\"")
+              fi
+            done
+            echo "services=[$(IFS=,; echo "${SERVICES[*]}")]" >> $GITHUB_OUTPUT
+          fi
+
+  # ── Build + Sign + Deploy (matrix per changed service) ─────────────────
+  build-sign-deploy:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.services != '[]'
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        service: ${{ fromJson(needs.detect-changes.outputs.services) }}
+        cloud: [aws, azure]
+
+    permissions:
+      id-token: write    # OIDC for AWS/Azure AND Cosign keyless signing
+      contents: read
+      security-events: write
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── Install Cosign ─────────────────────────────────────────────────
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3
+
+      # ── AWS auth ───────────────────────────────────────────────────────
+      - name: Configure AWS credentials
+        if: matrix.cloud == 'aws'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_GITHUB_ACTIONS_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Login to ECR
+        if: matrix.cloud == 'aws'
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      # ── Azure auth ─────────────────────────────────────────────────────
+      - name: Azure login
+        if: matrix.cloud == 'azure'
+        uses: azure/login@v2
+        with:
+          client-id:       ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id:       ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Login to ACR
+        if: matrix.cloud == 'azure'
+        run: az acr login --name ${{ secrets.ACR_NAME }}
+
+      # ── Determine image reference ──────────────────────────────────────
+      - name: Set image reference
+        id: image
+        run: |
+          SHA="sha-$(echo ${{ github.sha }} | cut -c1-7)"
+          if [[ "${{ matrix.cloud }}" == "aws" ]]; then
+            REGISTRY="${{ steps.login-ecr.outputs.registry }}"
+            REF="${REGISTRY}/${{ vars.PROJECT }}/prod/${{ matrix.service }}:${SHA}"
+          else
+            REF="${{ secrets.ACR_LOGIN_SERVER }}/${{ matrix.service }}:${SHA}"
+          fi
+          echo "ref=$REF" >> $GITHUB_OUTPUT
+          echo "tag=$SHA"  >> $GITHUB_OUTPUT
+
+      # ── Multi-arch build ───────────────────────────────────────────────
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Determine Dockerfile
+        id: dockerfile
+        run: |
+          case "${{ matrix.service }}" in
+            rust-realtime-chat)   DF="phase4/dockerfiles/rust-realtime-chat.Dockerfile";;
+            python-ml-inference)  DF="phase4/dockerfiles/python-ml-inference.Dockerfile";;
+            java-event-sourcing)  DF="phase4/dockerfiles/java-event-sourcing.Dockerfile";;
+            nodejs-bff-gateway)   DF="phase4/dockerfiles/nodejs-bff-gateway.Dockerfile";;
+            go-order-saga)        DF="phase4/dockerfiles/go-order-saga.Dockerfile";;
+          esac
+          echo "path=$DF" >> $GITHUB_OUTPUT
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context:    ${{ matrix.service }}
+          file:       ${{ steps.dockerfile.outputs.path }}
+          platforms:  linux/amd64,linux/arm64
+          push:       true
+          tags:       ${{ steps.image.outputs.ref }}
+          cache-from: type=gha,scope=${{ matrix.service }}-${{ matrix.cloud }}
+          cache-to:   type=gha,mode=max,scope=${{ matrix.service }}-${{ matrix.cloud }}
+
+      # ── Trivy vulnerability scan ───────────────────────────────────────
+      - name: Trivy scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref:  ${{ steps.image.outputs.ref }}
+          format:     sarif
+          output:     trivy-results.sarif
+          severity:   CRITICAL,HIGH
+          exit-code:  1
+
+      - name: Upload Trivy SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-results.sarif
+
+      # ── Cosign keyless signing ─────────────────────────────────────────
+      # Uses GitHub Actions OIDC token — no keys stored in GitHub Secrets
+      - name: Sign image with Cosign
+        run: |
+          cosign sign --yes "${{ steps.image.outputs.ref }}@${{ steps.build.outputs.digest }}"
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+
+      # ── Generate and attach SBOM ───────────────────────────────────────
+      - name: Generate SBOM
+        run: |
+          trivy image \
+            --format cyclonedx \
+            --output sbom.json \
+            "${{ steps.image.outputs.ref }}"
+
+      - name: Attach and sign SBOM
+        run: |
+          cosign attach sbom \
+            --sbom sbom.json \
+            "${{ steps.image.outputs.ref }}"
+          cosign sign --yes \
+            --attachment sbom \
+            "${{ steps.image.outputs.ref }}"
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+
+      # ── Verify signature before deploying ─────────────────────────────
+      - name: Verify signature
+        run: |
+          cosign verify \
+            --certificate-identity-regexp "https://github.com/${{ github.repository }}" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            "${{ steps.image.outputs.ref }}"
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+
+      # ── Deploy to EKS ──────────────────────────────────────────────────
+      - name: Deploy to EKS
+        if: matrix.cloud == 'aws' && github.ref == 'refs/heads/main'
+        run: |
+          aws eks update-kubeconfig --region us-east-1 --name ${{ secrets.EKS_CLUSTER_NAME_DEV }}
+          helm upgrade --install ${{ matrix.service }} \
+            ./phase2/helm/charts/${{ matrix.service }} \
+            --namespace dev --create-namespace \
+            --set image.repository=$(echo "${{ steps.image.outputs.ref }}" | cut -d: -f1) \
+            --set image.tag=${{ steps.image.outputs.tag }} \
+            --atomic --timeout 5m
+
+      # ── Deploy to AKS ──────────────────────────────────────────────────
+      - name: Deploy to AKS
+        if: matrix.cloud == 'azure' && github.ref == 'refs/heads/main'
+        run: |
+          az aks get-credentials \
+            --resource-group ${{ secrets.AKS_RESOURCE_GROUP_DEV }} \
+            --name ${{ secrets.AKS_CLUSTER_NAME_DEV }}
+          helm upgrade --install ${{ matrix.service }} \
+            ./phase2/helm/charts/${{ matrix.service }} \
+            --namespace dev --create-namespace \
+            --set image.repository=$(echo "${{ steps.image.outputs.ref }}" | cut -d: -f1) \
+            --set image.tag=${{ steps.image.outputs.tag }} \
+            --set ingress.className=azure/application-gateway \
+            --atomic --timeout 5m

@@ -1,0 +1,170 @@
+# opa-gatekeeper/templates/constraint-templates.yaml
+#
+# OPA Gatekeeper = policy-as-code for Kubernetes.
+# It runs as an admission webhook — every resource creation/update
+# is evaluated against your policies BEFORE being accepted by the API server.
+#
+# ── How it works ──────────────────────────────────────────────────────────
+# 1. ConstraintTemplate defines a REUSABLE policy in Rego (OPA's language)
+# 2. Constraint instantiates the template with specific parameters
+#    (e.g. "enforce this rule in namespace prod")
+#
+# Install:
+#   kubectl apply -f https://raw.githubusercontent.com/open-policy-agent/gatekeeper/release-3.16/deploy/gatekeeper.yaml
+
+# ── Policy 1: Require resource limits ─────────────────────────────────────
+# Every container MUST have CPU and memory limits.
+# Without limits, one runaway pod can consume all node resources.
+apiVersion: templates.gatekeeper.sh/v1
+kind: ConstraintTemplate
+metadata:
+  name: k8srequiredresourcelimits
+spec:
+  crd:
+    spec:
+      names:
+        kind: K8sRequiredResourceLimits
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package k8srequiredresourcelimits
+
+        violation[{"msg": msg}] {
+          container := input.review.object.spec.containers[_]
+          not container.resources.limits.cpu
+          msg := sprintf("Container '%s' must have CPU limits set", [container.name])
+        }
+
+        violation[{"msg": msg}] {
+          container := input.review.object.spec.containers[_]
+          not container.resources.limits.memory
+          msg := sprintf("Container '%s' must have memory limits set", [container.name])
+        }
+
+        violation[{"msg": msg}] {
+          container := input.review.object.spec.containers[_]
+          not container.resources.requests.cpu
+          msg := sprintf("Container '%s' must have CPU requests set", [container.name])
+        }
+
+        violation[{"msg": msg}] {
+          container := input.review.object.spec.containers[_]
+          not container.resources.requests.memory
+          msg := sprintf("Container '%s' must have memory requests set", [container.name])
+        }
+---
+# ── Policy 2: Block running as root ───────────────────────────────────────
+apiVersion: templates.gatekeeper.sh/v1
+kind: ConstraintTemplate
+metadata:
+  name: k8spspallowprivilegeescalationcontainer
+spec:
+  crd:
+    spec:
+      names:
+        kind: K8sPSPAllowPrivilegeEscalationContainer
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package k8spspallowprivilegeescalationcontainer
+
+        violation[{"msg": msg}] {
+          container := input.review.object.spec.containers[_]
+          container.securityContext.allowPrivilegeEscalation == true
+          msg := sprintf("Container '%s' must not allow privilege escalation", [container.name])
+        }
+
+        violation[{"msg": msg}] {
+          container := input.review.object.spec.containers[_]
+          container.securityContext.runAsRoot == true
+          msg := sprintf("Container '%s' must not run as root", [container.name])
+        }
+
+        violation[{"msg": msg}] {
+          container := input.review.object.spec.containers[_]
+          container.securityContext.runAsUser == 0
+          msg := sprintf("Container '%s' must not run as UID 0 (root)", [container.name])
+        }
+---
+# ── Policy 3: Require non-latest image tags ───────────────────────────────
+# :latest tags are non-deterministic — the same tag can point to different
+# images. Always use immutable tags (sha-abc1234, v1.2.3).
+apiVersion: templates.gatekeeper.sh/v1
+kind: ConstraintTemplate
+metadata:
+  name: k8srequiredimmagetag
+spec:
+  crd:
+    spec:
+      names:
+        kind: K8sRequiredImmageTag
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package k8srequiredimmagetag
+
+        violation[{"msg": msg}] {
+          container := input.review.object.spec.containers[_]
+          endswith(container.image, ":latest")
+          msg := sprintf("Container '%s' uses :latest tag — use an immutable tag (sha-, v1.x.y)", [container.name])
+        }
+
+        violation[{"msg": msg}] {
+          container := input.review.object.spec.containers[_]
+          not contains(container.image, ":")
+          msg := sprintf("Container '%s' has no image tag — use an immutable tag", [container.name])
+        }
+---
+# ── Policy 4: Require read-only root filesystem ───────────────────────────
+apiVersion: templates.gatekeeper.sh/v1
+kind: ConstraintTemplate
+metadata:
+  name: k8spspreadonlyrootfilesystem
+spec:
+  crd:
+    spec:
+      names:
+        kind: K8sPSPReadOnlyRootFilesystem
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package k8spspreadonlyrootfilesystem
+
+        violation[{"msg": msg}] {
+          container := input.review.object.spec.containers[_]
+          not container.securityContext.readOnlyRootFilesystem
+          msg := sprintf("Container '%s' must have readOnlyRootFilesystem: true", [container.name])
+        }
+---
+# ── Policy 5: Enforce required labels ─────────────────────────────────────
+# Every Deployment must have app.kubernetes.io/name and version labels.
+# These are used by Prometheus for metric labelling and by Istio for routing.
+apiVersion: templates.gatekeeper.sh/v1
+kind: ConstraintTemplate
+metadata:
+  name: k8srequiredlabels
+spec:
+  crd:
+    spec:
+      names:
+        kind: K8sRequiredLabels
+      validation:
+        openAPIV3Schema:
+          type: object
+          properties:
+            labels:
+              type: array
+              items:
+                type: string
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package k8srequiredlabels
+
+        violation[{"msg": msg}] {
+          required := {label | label := input.parameters.labels[_]}
+          provided := {label | input.review.object.metadata.labels[label]}
+          missing := required - provided
+          count(missing) > 0
+          msg := sprintf("Missing required labels: %v", [missing])
+        }

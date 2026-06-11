@@ -1,0 +1,13 @@
+# azure-devops/go-auth.yml
+trigger:
+  branches:
+    include: [main, "release/*"]
+  paths:
+    include: ["go-auth/*"]
+stages:
+  - template: templates/service-pipeline-template.yml
+    parameters:
+      service: go-auth
+      dockerfile: phase2/dockerfiles/go/Dockerfile
+      buildContext: go-auth
+      port: "8080"

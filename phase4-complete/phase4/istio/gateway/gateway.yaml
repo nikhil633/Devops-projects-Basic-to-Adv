@@ -1,0 +1,51 @@
+# istio/gateway/gateway.yaml
+#
+# A Gateway defines the entry point into the mesh — it configures
+# the ingress proxy (running at the edge of the cluster) to accept
+# traffic on specific ports/protocols.
+#
+# Think of it as the "door" into the mesh.
+# VirtualServices (next file) define where traffic goes once inside.
+
+apiVersion: networking.istio.io/v1beta1
+kind: Gateway
+metadata:
+  name: main-gateway
+  namespace: istio-system
+spec:
+  selector:
+    istio: ingressgateway    # applies to the default ingress gateway pods
+  servers:
+    # HTTP — redirects to HTTPS
+    - port:
+        number: 80
+        name: http
+        protocol: HTTP
+      hosts:
+        - "*.example.com"    # replace with your domain
+      tls:
+        httpsRedirect: true  # 301 redirect all HTTP → HTTPS
+
+    # HTTPS — terminates TLS at the gateway
+    - port:
+        number: 443
+        name: https
+        protocol: HTTPS
+      hosts:
+        - "*.example.com"
+      tls:
+        mode: SIMPLE
+        credentialName: wildcard-tls-cert   # Kubernetes TLS secret name
+---
+# PeerAuthentication — enforce mTLS between ALL services in the mesh
+# Once this is applied, plaintext traffic between services is rejected.
+# Services authenticate each other using SPIFFE X.509 certificates
+# issued by Istio's built-in CA.
+apiVersion: security.istio.io/v1beta1
+kind: PeerAuthentication
+metadata:
+  name: mesh-wide-mtls
+  namespace: istio-system   # mesh-wide scope when in istio-system
+spec:
+  mtls:
+    mode: STRICT   # PERMISSIVE allows plaintext (migration), STRICT enforces mTLS

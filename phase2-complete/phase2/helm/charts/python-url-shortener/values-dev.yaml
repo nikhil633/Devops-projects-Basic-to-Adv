@@ -1,0 +1,27 @@
+# helm/charts/python-url-shortener/values-dev.yaml
+replicaCount: 1
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 200m
+    memory: 128Mi
+
+autoscaling:
+  enabled: false
+
+ingress:
+  hosts:
+    - host: url-shortener.dev.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+
+env:
+  REDIS_URL: "redis://redis:6379"
+  LOG_LEVEL: "debug"
+
+podDisruptionBudget:
+  enabled: false

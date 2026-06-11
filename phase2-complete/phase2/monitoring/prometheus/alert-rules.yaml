@@ -1,0 +1,231 @@
+# monitoring/prometheus/alert-rules.yaml
+#
+# Apply with: kubectl apply -f monitoring/prometheus/alert-rules.yaml
+#
+# PrometheusRule is a CRD from the Prometheus Operator.
+# Prometheus automatically picks up rules from resources with the right label.
+#
+# Alert severity levels:
+#   warning  — investigate soon (Slack notification)
+#   critical — fix now (PagerDuty + Slack)
+
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: microservices-alerts
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack   # must match the Prometheus Operator selector
+spec:
+  groups:
+    # ── HTTP Error Rate ──────────────────────────────────────────────────────
+    # Fires when >1% of requests return 5xx for 5 minutes
+    - name: http-error-rate
+      interval: 30s
+      rules:
+        - alert: HighErrorRate
+          expr: |
+            (
+              sum(rate(http_requests_total{status=~"5.."}[5m])) by (namespace, service)
+              /
+              sum(rate(http_requests_total[5m])) by (namespace, service)
+            ) > 0.01
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "High error rate on {{ $labels.service }}"
+            description: >
+              {{ $labels.service }} in {{ $labels.namespace }} has error rate
+              {{ $value | humanizePercentage }} over the last 5 minutes.
+              Investigate logs and traces immediately.
+
+        - alert: CriticalErrorRate
+          expr: |
+            (
+              sum(rate(http_requests_total{status=~"5.."}[5m])) by (namespace, service)
+              /
+              sum(rate(http_requests_total[5m])) by (namespace, service)
+            ) > 0.05
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Critical error rate on {{ $labels.service }}"
+            description: >
+              {{ $labels.service }} in {{ $labels.namespace }} has a critical error rate of
+              {{ $value | humanizePercentage }}. SLO breach imminent.
+
+    # ── Latency ──────────────────────────────────────────────────────────────
+    # P99 latency > 1s
+    - name: latency
+      interval: 30s
+      rules:
+        - alert: HighLatencyP99
+          expr: |
+            histogram_quantile(0.99,
+              sum(rate(http_request_duration_seconds_bucket[5m])) by (namespace, service, le)
+            ) > 1.0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "High P99 latency on {{ $labels.service }}"
+            description: >
+              P99 latency for {{ $labels.service }} is {{ $value | humanizeDuration }}.
+              SLO target is 1s.
+
+        - alert: HighLatencyP50
+          expr: |
+            histogram_quantile(0.50,
+              sum(rate(http_request_duration_seconds_bucket[5m])) by (namespace, service, le)
+            ) > 0.5
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "High median latency on {{ $labels.service }}"
+            description: >
+              P50 latency for {{ $labels.service }} is {{ $value | humanizeDuration }}.
+              Median should be under 500ms.
+
+    # ── Pod Health ────────────────────────────────────────────────────────────
+    - name: pod-health
+      rules:
+        - alert: PodCrashLooping
+          expr: |
+            rate(kube_pod_container_status_restarts_total[15m]) * 60 * 15 > 3
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Pod {{ $labels.pod }} is crash looping"
+            description: >
+              Pod {{ $labels.pod }} in {{ $labels.namespace }} has restarted
+              {{ $value | printf "%.0f" }} times in the last 15 minutes.
+
+        - alert: PodNotReady
+          expr: |
+            kube_pod_status_ready{condition="false"} == 1
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Pod {{ $labels.pod }} is not ready"
+            description: >
+              Pod {{ $labels.pod }} in {{ $labels.namespace }} has been not-ready
+              for 10 minutes. Check events: kubectl describe pod {{ $labels.pod }} -n {{ $labels.namespace }}
+
+        - alert: DeploymentReplicasMismatch
+          expr: |
+            kube_deployment_spec_replicas != kube_deployment_status_available_replicas
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Deployment {{ $labels.deployment }} has fewer replicas than desired"
+            description: >
+              Deployment {{ $labels.deployment }} in {{ $labels.namespace }}
+              has {{ $value }} available replicas but expects more.
+
+    # ── Resource Usage ────────────────────────────────────────────────────────
+    - name: resource-usage
+      rules:
+        - alert: HighMemoryUsage
+          expr: |
+            (
+              container_memory_working_set_bytes{container!="", container!="POD"}
+              /
+              kube_pod_container_resource_limits{resource="memory", container!=""}
+            ) > 0.85
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Container {{ $labels.container }} memory usage is high"
+            description: >
+              Container {{ $labels.container }} in pod {{ $labels.pod }}
+              is using {{ $value | humanizePercentage }} of its memory limit.
+              OOMKill risk — consider increasing limits or investigating memory leak.
+
+        - alert: HighCPUUsage
+          expr: |
+            (
+              rate(container_cpu_usage_seconds_total{container!="", container!="POD"}[5m])
+              /
+              kube_pod_container_resource_limits{resource="cpu", container!=""}
+            ) > 0.90
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Container {{ $labels.container }} CPU usage is high"
+            description: >
+              Container {{ $labels.container }} in pod {{ $labels.pod }}
+              is using {{ $value | humanizePercentage }} of its CPU limit.
+
+        - alert: PersistentVolumeFillingUp
+          expr: |
+            kubelet_volume_stats_used_bytes / kubelet_volume_stats_capacity_bytes > 0.85
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "PersistentVolume {{ $labels.persistentvolumeclaim }} is filling up"
+            description: >
+              PVC {{ $labels.persistentvolumeclaim }} in {{ $labels.namespace }}
+              is {{ $value | humanizePercentage }} full.
+
+    # ── Service-specific alerts ───────────────────────────────────────────────
+
+    # Rate limiter: alert if allow rate drops significantly (possible Redis issue)
+    - name: rate-limiter
+      rules:
+        - alert: RateLimiterHighDenyRate
+          expr: |
+            (
+              sum(rate(rate_limiter_checks_total{result="denied"}[5m])) by (namespace)
+              /
+              sum(rate(rate_limiter_checks_total[5m])) by (namespace)
+            ) > 0.50
+          for: 5m
+          labels:
+            severity: warning
+            service: rust-ratelimiter
+          annotations:
+            summary: "Rate limiter denying >50% of requests"
+            description: >
+              The rate limiter is rejecting {{ $value | humanizePercentage }} of requests.
+              This may indicate a DDoS attempt or misconfigured limits.
+
+    # Auth service: alert on spike in failed logins
+    - name: auth-service
+      rules:
+        - alert: AuthHighFailureRate
+          expr: |
+            sum(rate(auth_login_total{status="unauthorized"}[5m])) by (namespace) > 10
+          for: 2m
+          labels:
+            severity: warning
+            service: go-auth
+          annotations:
+            summary: "High auth failure rate"
+            description: >
+              Auth service is seeing {{ $value | printf "%.1f" }} failed login attempts/sec.
+              Possible brute force attack.
+
+    # Inventory: alert if no products have been created in a while (business metric)
+    - name: inventory-service
+      rules:
+        - alert: NoProductCreations
+          expr: |
+            sum(increase(inventory_products_created_total[1h])) by (namespace) == 0
+          for: 2h
+          labels:
+            severity: warning
+            service: java-inventory
+          annotations:
+            summary: "No products created in 2 hours"
+            description: >
+              The inventory service has not recorded any product creations
+              in the last 2 hours. This may indicate a business or integration issue.

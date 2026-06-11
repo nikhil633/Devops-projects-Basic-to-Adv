@@ -1,0 +1,13 @@
+# azure-devops/rust-ratelimiter.yml
+trigger:
+  branches:
+    include: [main, "release/*"]
+  paths:
+    include: ["rust-ratelimiter/*"]
+stages:
+  - template: templates/service-pipeline-template.yml
+    parameters:
+      service: rust-ratelimiter
+      dockerfile: phase2/dockerfiles/rust/Dockerfile
+      buildContext: rust-ratelimiter
+      port: "9000"

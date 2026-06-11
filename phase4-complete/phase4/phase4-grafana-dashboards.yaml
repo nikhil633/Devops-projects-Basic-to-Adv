@@ -1,0 +1,212 @@
+# phase4-grafana-dashboards.yaml
+# Additional Grafana dashboards for Phase 4 observability.
+# Apply with: kubectl apply -f phase4-grafana-dashboards.yaml
+
+# ── Dashboard 1: Istio Service Mesh Overview ─────────────────────────────
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: istio-mesh-dashboard
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+data:
+  istio-mesh.json: |
+    {
+      "title": "Istio Service Mesh",
+      "uid": "istio-mesh-overview",
+      "schemaVersion": 38,
+      "refresh": "30s",
+      "panels": [
+        {
+          "title": "mTLS Connection Rate",
+          "type": "stat",
+          "gridPos": { "x": 0, "y": 0, "w": 6, "h": 4 },
+          "targets": [{
+            "expr": "sum(rate(istio_requests_total{connection_security_policy='mutual_tls'}[5m])) / sum(rate(istio_requests_total[5m])) * 100",
+            "legendFormat": "mTLS %"
+          }],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percent",
+              "thresholds": {
+                "steps": [
+                  {"color": "red", "value": null},
+                  {"color": "yellow", "value": 90},
+                  {"color": "green", "value": 99}
+                ]
+              }
+            }
+          }
+        },
+        {
+          "title": "Request Rate by Service",
+          "type": "timeseries",
+          "gridPos": { "x": 0, "y": 4, "w": 12, "h": 8 },
+          "targets": [{
+            "expr": "sum(rate(istio_requests_total{namespace='prod'}[5m])) by (destination_service_name)",
+            "legendFormat": "{{ destination_service_name }}"
+          }],
+          "fieldConfig": { "defaults": { "unit": "reqps" } }
+        },
+        {
+          "title": "Error Rate by Service (Istio)",
+          "type": "timeseries",
+          "gridPos": { "x": 12, "y": 4, "w": 12, "h": 8 },
+          "targets": [{
+            "expr": "sum(rate(istio_requests_total{namespace='prod',response_code=~'5..'}[5m])) by (destination_service_name) / sum(rate(istio_requests_total{namespace='prod'}[5m])) by (destination_service_name) * 100",
+            "legendFormat": "{{ destination_service_name }}"
+          }],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percent",
+              "thresholds": {
+                "steps": [
+                  {"color": "green", "value": null},
+                  {"color": "yellow", "value": 1},
+                  {"color": "red", "value": 5}
+                ]
+              }
+            }
+          }
+        },
+        {
+          "title": "P99 Latency by Service (Istio)",
+          "type": "timeseries",
+          "gridPos": { "x": 0, "y": 12, "w": 24, "h": 8 },
+          "targets": [{
+            "expr": "histogram_quantile(0.99, sum(rate(istio_request_duration_milliseconds_bucket{namespace='prod'}[5m])) by (destination_service_name, le))",
+            "legendFormat": "p99 {{ destination_service_name }}"
+          }],
+          "fieldConfig": { "defaults": { "unit": "ms" } }
+        }
+      ]
+    }
+---
+# ── Dashboard 2: KEDA Autoscaling ────────────────────────────────────────
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: keda-autoscaling-dashboard
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+data:
+  keda.json: |
+    {
+      "title": "KEDA Autoscaling",
+      "uid": "keda-autoscaling",
+      "schemaVersion": 38,
+      "refresh": "30s",
+      "panels": [
+        {
+          "title": "Kafka Consumer Lag — Order Saga",
+          "type": "timeseries",
+          "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
+          "targets": [{
+            "expr": "sum(kafka_consumergroup_lag{consumergroup='order-saga-orchestrator'}) by (topic)",
+            "legendFormat": "{{ topic }}"
+          }],
+          "fieldConfig": { "defaults": { "unit": "short" } }
+        },
+        {
+          "title": "Replica Count vs Kafka Lag",
+          "type": "timeseries",
+          "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
+          "targets": [
+            {
+              "expr": "kube_deployment_spec_replicas{deployment='go-order-saga', namespace='prod'}",
+              "legendFormat": "replicas"
+            },
+            {
+              "expr": "sum(kafka_consumergroup_lag{consumergroup='order-saga-orchestrator'}) / 50",
+              "legendFormat": "lag / threshold"
+            }
+          ]
+        },
+        {
+          "title": "ML Inference Queue Depth",
+          "type": "timeseries",
+          "gridPos": { "x": 0, "y": 8, "w": 12, "h": 8 },
+          "targets": [{
+            "expr": "sum(ml_queue_depth{namespace='prod'})",
+            "legendFormat": "queue depth"
+          }]
+        },
+        {
+          "title": "Chat Active Connections",
+          "type": "timeseries",
+          "gridPos": { "x": 12, "y": 8, "w": 12, "h": 8 },
+          "targets": [{
+            "expr": "sum(chat_active_connections{namespace='prod'})",
+            "legendFormat": "active connections"
+          }]
+        }
+      ]
+    }
+---
+# ── Dashboard 3: Canary Deployment Progress ──────────────────────────────
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: canary-progress-dashboard
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+data:
+  canary.json: |
+    {
+      "title": "Canary Deployments",
+      "uid": "canary-progress",
+      "schemaVersion": 38,
+      "refresh": "15s",
+      "panels": [
+        {
+          "title": "Canary Traffic Weight by Service",
+          "type": "bargauge",
+          "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
+          "targets": [{
+            "expr": "flagger_canary_weight{namespace='prod'}",
+            "legendFormat": "{{ name }}"
+          }],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percent",
+              "min": 0,
+              "max": 100,
+              "thresholds": {
+                "steps": [
+                  {"color": "blue", "value": null},
+                  {"color": "green", "value": 100}
+                ]
+              }
+            }
+          }
+        },
+        {
+          "title": "Canary Error Rate During Rollout",
+          "type": "timeseries",
+          "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
+          "targets": [
+            {
+              "expr": "sum(rate(istio_requests_total{namespace='prod',destination_service_name=~'.*-canary',response_code=~'5..'}[1m])) by (destination_service_name) / sum(rate(istio_requests_total{namespace='prod',destination_service_name=~'.*-canary'}[1m])) by (destination_service_name) * 100",
+              "legendFormat": "{{ destination_service_name }}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percent",
+              "custom": {
+                "thresholdsStyle": {"mode": "line+area"}
+              },
+              "thresholds": {
+                "steps": [
+                  {"color": "transparent", "value": null},
+                  {"color": "red", "value": 1}
+                ]
+              }
+            }
+          }
+        }
+      ]
+    }

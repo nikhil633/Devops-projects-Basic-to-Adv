@@ -1,0 +1,166 @@
+# keda/scaled-objects.yaml
+#
+# KEDA (Kubernetes Event-Driven Autoscaler) scales workloads based on
+# external metrics — Kafka consumer lag, Redis queue depth, CPU, etc.
+#
+# ── Why KEDA over HPA? ────────────────────────────────────────────────────
+# HPA only scales on CPU/memory. That works for HTTP services but
+# not for event-driven consumers:
+#   - If Kafka lag is 1M messages, CPU might be 0% (waiting for work)
+#   - HPA would see low CPU → scale DOWN → make the lag worse
+#   - KEDA sees high lag → scale UP → process messages faster
+#
+# Install KEDA:
+#   helm repo add kedacore https://kedacore.github.io/charts
+#   helm upgrade --install keda kedacore/keda --namespace keda --create-namespace
+
+# ── Java Event Sourcing — scale on Kafka consumer lag ────────────────────
+# The Kafka consumer group "account-read-model" processes events.
+# When lag (unconsumed messages) grows → scale up more consumers.
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: java-event-sourcing-kafka
+  namespace: prod
+spec:
+  scaleTargetRef:
+    name: java-event-sourcing
+    kind: Deployment
+
+  pollingInterval:  15   # check Kafka lag every 15s
+  cooldownPeriod:   60   # wait 60s before scaling down (avoid thrashing)
+
+  minReplicaCount:  2    # always keep 2 replicas (HA)
+  maxReplicaCount:  20   # max 20 pods
+
+  triggers:
+    - type: kafka
+      metadata:
+        bootstrapServers: kafka.kafka:9092
+        consumerGroup:    account-read-model
+        topic:            account-events
+        lagThreshold:     "100"   # scale up if lag > 100 messages per partition
+        activationLagThreshold: "10"
+---
+# ── Go Order Saga — scale on Kafka order events lag ──────────────────────
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: go-order-saga-kafka
+  namespace: prod
+spec:
+  scaleTargetRef:
+    name: go-order-saga
+  pollingInterval: 15
+  cooldownPeriod:  60
+  minReplicaCount: 2
+  maxReplicaCount: 15
+  triggers:
+    - type: kafka
+      metadata:
+        bootstrapServers:        kafka.kafka:9092
+        consumerGroup:           order-saga-orchestrator
+        topic:                   order.created
+        lagThreshold:            "50"
+        activationLagThreshold:  "5"
+---
+# ── Python ML Inference — scale on Redis inference queue depth ────────────
+# The ML service uses an asyncio queue internally, but we expose queue depth
+# as a Prometheus metric (ml_queue_depth) — KEDA reads it.
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: python-ml-inference-queue
+  namespace: prod
+spec:
+  scaleTargetRef:
+    name: python-ml-inference
+  pollingInterval: 10
+  cooldownPeriod:  120   # ML pods take time to load models — slow scale-down
+  minReplicaCount: 2
+  maxReplicaCount: 10
+  triggers:
+    - type: prometheus
+      metadata:
+        serverAddress: http://prometheus.monitoring:9090
+        metricName:    ml_queue_depth
+        query:         sum(ml_queue_depth{namespace="prod"})
+        threshold:     "50"       # scale if queue depth > 50 requests
+        activationThreshold: "5"
+---
+# ── Rust Real-time Chat — scale on active WebSocket connections ───────────
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: rust-realtime-chat-connections
+  namespace: prod
+spec:
+  scaleTargetRef:
+    name: rust-realtime-chat
+  pollingInterval: 30
+  cooldownPeriod:  300   # WebSocket connections are long-lived — slow cooldown
+  minReplicaCount: 2
+  maxReplicaCount: 20
+  triggers:
+    - type: prometheus
+      metadata:
+        serverAddress: http://prometheus.monitoring:9090
+        metricName:    chat_active_connections_per_pod
+        # Scale when avg connections per pod exceeds 500
+        query: >
+          sum(chat_active_connections{namespace="prod"})
+          /
+          count(up{job="rust-realtime-chat", namespace="prod"})
+        threshold: "500"
+        activationThreshold: "10"
+---
+# ── Node.js BFF — scale on GraphQL request rate (Prometheus) ─────────────
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: nodejs-bff-gateway-rps
+  namespace: prod
+spec:
+  scaleTargetRef:
+    name: nodejs-bff-gateway
+  pollingInterval: 15
+  cooldownPeriod:  60
+  minReplicaCount: 3
+  maxReplicaCount: 20
+  triggers:
+    - type: prometheus
+      metadata:
+        serverAddress: http://prometheus.monitoring:9090
+        metricName:    bff_requests_per_second
+        # Scale when avg RPS per pod exceeds 100
+        query: >
+          sum(rate(http_requests_total{
+            namespace="prod",
+            service="nodejs-bff-gateway"
+          }[1m]))
+          /
+          count(up{job="nodejs-bff-gateway", namespace="prod"})
+        threshold: "100"
+        activationThreshold: "10"
+---
+# ── TriggerAuthentication for Kafka (SASL/SSL in production) ─────────────
+# In prod, Kafka requires authentication. KEDA uses this to connect securely.
+apiVersion: keda.sh/v1alpha1
+kind: TriggerAuthentication
+metadata:
+  name: kafka-trigger-auth
+  namespace: prod
+spec:
+  secretTargetRef:
+    - parameter: sasl
+      name: kafka-secrets
+      key: sasl
+    - parameter: username
+      name: kafka-secrets
+      key: username
+    - parameter: password
+      name: kafka-secrets
+      key: password
+    - parameter: tls
+      name: kafka-secrets
+      key: tls

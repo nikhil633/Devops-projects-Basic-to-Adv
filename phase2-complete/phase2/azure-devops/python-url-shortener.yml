@@ -1,0 +1,263 @@
+# azure-devops/python-url-shortener.yml
+# Azure DevOps pipeline for Python URL Shortener.
+# Equivalent to the GitHub Actions pipeline but using Azure Pipelines syntax.
+#
+# Prerequisites in Azure DevOps:
+#   1. Service connection to ACR (type: Docker Registry)
+#   2. Service connection to Azure (type: Azure Resource Manager, Workload Identity Federation)
+#   3. Service connection to AWS (type: AWS, or use az cli with OIDC)
+#   4. Variable groups: "dev-secrets", "prod-secrets" in Library
+#   5. Environments: "dev", "staging", "prod" (set approval gates on prod)
+
+trigger:
+  branches:
+    include: [main, "release/*"]
+  paths:
+    include: ["python-url-shortener/*"]
+
+pr:
+  branches:
+    include: [main]
+  paths:
+    include: ["python-url-shortener/*"]
+
+variables:
+  SERVICE: python-url-shortener
+  DOCKERFILE: phase2/dockerfiles/python/Dockerfile
+  BUILD_CONTEXT: python-url-shortener
+  IMAGE_TAG: sha-$(Build.SourceVersion)
+
+stages:
+  # ── Stage 1: Test ─────────────────────────────────────────────────────────
+  - stage: Test
+    displayName: "Test"
+    jobs:
+      - job: UnitTests
+        displayName: "Run unit tests"
+        pool:
+          vmImage: ubuntu-latest
+        steps:
+          - task: UsePythonVersion@0
+            inputs:
+              versionSpec: "3.12"
+            displayName: "Set up Python 3.12"
+
+          - script: |
+              cd python-url-shortener
+              pip install -r requirements.txt pytest pytest-asyncio httpx
+              pytest tests/ -v --tb=short --junitxml=$(Build.ArtifactStagingDirectory)/test-results.xml
+            displayName: "Run pytest"
+
+          - task: PublishTestResults@2
+            inputs:
+              testResultsFormat: JUnit
+              testResultsFiles: "$(Build.ArtifactStagingDirectory)/test-results.xml"
+            condition: always()
+
+  # ── Stage 2: Build and Push ───────────────────────────────────────────────
+  - stage: Build
+    displayName: "Build → Scan → Push"
+    dependsOn: Test
+    condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest'))
+    jobs:
+      - job: BuildPushACR
+        displayName: "Build and push to ACR"
+        pool:
+          vmImage: ubuntu-latest
+        variables:
+          - group: dev-secrets   # ACR_LOGIN_SERVER, ACR_NAME, etc.
+        steps:
+          - task: Docker@2
+            displayName: "Login to ACR"
+            inputs:
+              command: login
+              containerRegistry: acr-service-connection   # name in Azure DevOps
+
+          - task: Docker@2
+            displayName: "Build and push"
+            inputs:
+              command: buildAndPush
+              repository: $(SERVICE)
+              dockerfile: $(DOCKERFILE)
+              buildContext: $(BUILD_CONTEXT)
+              containerRegistry: acr-service-connection
+              tags: |
+                $(IMAGE_TAG)
+                latest
+
+          # Trivy scan via script (no native ADO task)
+          - script: |
+              docker run --rm \
+                -v /var/run/docker.sock:/var/run/docker.sock \
+                aquasec/trivy:latest image \
+                --severity CRITICAL,HIGH \
+                --exit-code 1 \
+                $(ACR_LOGIN_SERVER)/$(SERVICE):$(IMAGE_TAG)
+            displayName: "Trivy vulnerability scan"
+
+      - job: BuildPushECR
+        displayName: "Build and push to ECR"
+        pool:
+          vmImage: ubuntu-latest
+        variables:
+          - group: dev-secrets
+        steps:
+          - task: AWSShellScript@1
+            displayName: "Login to ECR and build"
+            inputs:
+              awsCredentials: aws-service-connection
+              regionName: us-east-1
+              scriptType: inline
+              inlineScript: |
+                ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+                REGISTRY="${ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com"
+                aws ecr get-login-password --region us-east-1 | \
+                  docker login --username AWS --password-stdin $REGISTRY
+
+                docker build -t $REGISTRY/$(VAR_PROJECT)/dev/$(SERVICE):$(IMAGE_TAG) \
+                  -f $(DOCKERFILE) $(BUILD_CONTEXT)
+                docker push $REGISTRY/$(VAR_PROJECT)/dev/$(SERVICE):$(IMAGE_TAG)
+
+  # ── Stage 3: Deploy to Dev ────────────────────────────────────────────────
+  - stage: DeployDev
+    displayName: "Deploy → Dev"
+    dependsOn: Build
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+
+    jobs:
+      - deployment: DeployAKSDev
+        displayName: "Deploy to AKS dev"
+        pool:
+          vmImage: ubuntu-latest
+        environment: dev       # maps to Azure DevOps Environment with approvals
+        variables:
+          - group: dev-secrets
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+
+                - task: AzureCLI@2
+                  displayName: "Get AKS credentials"
+                  inputs:
+                    azureSubscription: azure-service-connection
+                    scriptType: bash
+                    scriptLocation: inlineScript
+                    inlineScript: |
+                      az aks get-credentials \
+                        --resource-group $(AKS_RESOURCE_GROUP_DEV) \
+                        --name $(AKS_CLUSTER_NAME_DEV) \
+                        --overwrite-existing
+
+                - task: HelmDeploy@0
+                  displayName: "Helm upgrade"
+                  inputs:
+                    connectionType: None
+                    command: upgrade
+                    chartType: FilePath
+                    chartPath: phase2/helm/charts/$(SERVICE)
+                    releaseName: $(SERVICE)
+                    namespace: dev
+                    install: true
+                    waitForExecution: true
+                    valueFile: |
+                      phase2/helm/charts/$(SERVICE)/values.yaml
+                      phase2/helm/charts/$(SERVICE)/values-dev.yaml
+                    overrideValues: |
+                      image.repository=$(ACR_LOGIN_SERVER)/$(SERVICE)
+                      image.tag=$(IMAGE_TAG)
+                      ingress.className=azure/application-gateway
+                    arguments: "--atomic --timeout 5m"
+
+      - deployment: DeployEKSDev
+        displayName: "Deploy to EKS dev"
+        pool:
+          vmImage: ubuntu-latest
+        environment: dev
+        variables:
+          - group: dev-secrets
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+
+                - task: AWSShellScript@1
+                  displayName: "Configure kubectl for EKS"
+                  inputs:
+                    awsCredentials: aws-service-connection
+                    regionName: us-east-1
+                    scriptType: inline
+                    inlineScript: |
+                      aws eks update-kubeconfig --region us-east-1 --name $(EKS_CLUSTER_NAME_DEV)
+
+                - task: HelmDeploy@0
+                  displayName: "Helm upgrade to EKS"
+                  inputs:
+                    connectionType: None
+                    command: upgrade
+                    chartType: FilePath
+                    chartPath: phase2/helm/charts/$(SERVICE)
+                    releaseName: $(SERVICE)
+                    namespace: dev
+                    install: true
+                    waitForExecution: true
+                    valueFile: |
+                      phase2/helm/charts/$(SERVICE)/values.yaml
+                      phase2/helm/charts/$(SERVICE)/values-dev.yaml
+                    overrideValues: |
+                      image.repository=$(ECR_REGISTRY)/$(VAR_PROJECT)/dev/$(SERVICE)
+                      image.tag=$(IMAGE_TAG)
+                    arguments: "--atomic --timeout 5m"
+
+  # ── Stage 4: Deploy to Prod (approval gate) ────────────────────────────────
+  - stage: DeployProd
+    displayName: "Deploy → Prod"
+    dependsOn: DeployDev
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+
+    jobs:
+      - deployment: DeployAKSProd
+        displayName: "Deploy to AKS prod"
+        pool:
+          vmImage: ubuntu-latest
+        environment: prod      # Configure "Approvals and checks" on this environment
+        variables:
+          - group: prod-secrets
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+
+                - task: AzureCLI@2
+                  displayName: "Get AKS prod credentials"
+                  inputs:
+                    azureSubscription: azure-service-connection-prod
+                    scriptType: bash
+                    scriptLocation: inlineScript
+                    inlineScript: |
+                      az aks get-credentials \
+                        --resource-group $(AKS_RESOURCE_GROUP_PROD) \
+                        --name $(AKS_CLUSTER_NAME_PROD) \
+                        --overwrite-existing
+
+                - task: HelmDeploy@0
+                  displayName: "Helm upgrade prod"
+                  inputs:
+                    connectionType: None
+                    command: upgrade
+                    chartType: FilePath
+                    chartPath: phase2/helm/charts/$(SERVICE)
+                    releaseName: $(SERVICE)
+                    namespace: prod
+                    install: true
+                    waitForExecution: true
+                    valueFile: |
+                      phase2/helm/charts/$(SERVICE)/values.yaml
+                      phase2/helm/charts/$(SERVICE)/values-prod.yaml
+                    overrideValues: |
+                      image.repository=$(ACR_LOGIN_SERVER_PROD)/$(SERVICE)
+                      image.tag=$(IMAGE_TAG)
+                    arguments: "--atomic --timeout 10m"

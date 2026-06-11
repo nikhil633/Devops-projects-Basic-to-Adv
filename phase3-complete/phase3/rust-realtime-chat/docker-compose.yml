@@ -1,0 +1,34 @@
+version: "3.9"
+services:
+  app:
+    build: .
+    ports:
+      - "7000:7000"
+    environment:
+      REDIS_URL: redis://redis:6379
+      PORT: "7000"
+      RUST_LOG: info
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  # Scale to 2 instances to test cross-pod pub/sub
+  app2:
+    build: .
+    ports:
+      - "7001:7000"
+    environment:
+      REDIS_URL: redis://redis:6379
+      PORT: "7000"
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      retries: 5

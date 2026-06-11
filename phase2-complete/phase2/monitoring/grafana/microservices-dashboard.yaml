@@ -1,0 +1,207 @@
+# monitoring/grafana/microservices-dashboard.yaml
+#
+# Apply with: kubectl apply -f monitoring/grafana/microservices-dashboard.yaml
+#
+# Grafana's sidecar picks up ConfigMaps with label grafana_dashboard=1
+# and automatically loads them as dashboards — no manual import needed.
+#
+# This dashboard shows the 4 Golden Signals for all 5 services:
+#   Latency    — how long requests take (P50, P95, P99)
+#   Traffic    — requests per second
+#   Errors     — error rate as a percentage
+#   Saturation — CPU and memory utilisation
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: microservices-golden-signals
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"   # grafana sidecar watches for this label
+data:
+  microservices.json: |
+    {
+      "title": "Microservices — Golden Signals",
+      "uid": "microservices-golden-signals",
+      "schemaVersion": 38,
+      "refresh": "30s",
+      "time": { "from": "now-1h", "to": "now" },
+      "templating": {
+        "list": [
+          {
+            "name": "namespace",
+            "type": "query",
+            "query": "label_values(kube_pod_info, namespace)",
+            "refresh": 2,
+            "includeAll": true,
+            "allValue": ".*"
+          },
+          {
+            "name": "service",
+            "type": "query",
+            "query": "label_values(http_requests_total{namespace=~\"$namespace\"}, service)",
+            "refresh": 2,
+            "includeAll": true,
+            "allValue": ".*"
+          }
+        ]
+      },
+      "panels": [
+        {
+          "title": "Request Rate (RPS)",
+          "type": "timeseries",
+          "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
+          "targets": [
+            {
+              "expr": "sum(rate(http_requests_total{namespace=~\"$namespace\", service=~\"$service\"}[5m])) by (service)",
+              "legendFormat": "{{ service }}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "reqps",
+              "color": { "mode": "palette-classic" }
+            }
+          }
+        },
+        {
+          "title": "Error Rate (%)",
+          "type": "timeseries",
+          "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
+          "targets": [
+            {
+              "expr": "sum(rate(http_requests_total{namespace=~\"$namespace\", service=~\"$service\", status=~\"5..\"}[5m])) by (service) / sum(rate(http_requests_total{namespace=~\"$namespace\", service=~\"$service\"}[5m])) by (service) * 100",
+              "legendFormat": "{{ service }}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percent",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "yellow", "value": 1 },
+                  { "color": "red", "value": 5 }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "title": "P99 Latency (ms)",
+          "type": "timeseries",
+          "gridPos": { "x": 0, "y": 8, "w": 12, "h": 8 },
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{namespace=~\"$namespace\", service=~\"$service\"}[5m])) by (service, le)) * 1000",
+              "legendFormat": "p99 {{ service }}"
+            },
+            {
+              "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{namespace=~\"$namespace\", service=~\"$service\"}[5m])) by (service, le)) * 1000",
+              "legendFormat": "p95 {{ service }}"
+            },
+            {
+              "expr": "histogram_quantile(0.50, sum(rate(http_request_duration_seconds_bucket{namespace=~\"$namespace\", service=~\"$service\"}[5m])) by (service, le)) * 1000",
+              "legendFormat": "p50 {{ service }}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "ms",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "yellow", "value": 500 },
+                  { "color": "red", "value": 1000 }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "title": "Pod CPU Usage (%)",
+          "type": "timeseries",
+          "gridPos": { "x": 12, "y": 8, "w": 12, "h": 8 },
+          "targets": [
+            {
+              "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=~\"$namespace\", container!=\"\", container!=\"POD\"}[5m])) by (pod) / sum(kube_pod_container_resource_limits{namespace=~\"$namespace\", resource=\"cpu\", container!=\"\"}) by (pod) * 100",
+              "legendFormat": "{{ pod }}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": { "unit": "percent" }
+          }
+        },
+        {
+          "title": "Pod Memory Usage (%)",
+          "type": "timeseries",
+          "gridPos": { "x": 0, "y": 16, "w": 12, "h": 8 },
+          "targets": [
+            {
+              "expr": "sum(container_memory_working_set_bytes{namespace=~\"$namespace\", container!=\"\", container!=\"POD\"}) by (pod) / sum(kube_pod_container_resource_limits{namespace=~\"$namespace\", resource=\"memory\", container!=\"\"}) by (pod) * 100",
+              "legendFormat": "{{ pod }}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percent",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "yellow", "value": 75 },
+                  { "color": "red", "value": 90 }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "title": "Pod Restarts",
+          "type": "timeseries",
+          "gridPos": { "x": 12, "y": 16, "w": 12, "h": 8 },
+          "targets": [
+            {
+              "expr": "sum(increase(kube_pod_container_status_restarts_total{namespace=~\"$namespace\"}[1h])) by (pod)",
+              "legendFormat": "{{ pod }}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "red", "value": 1 }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "title": "Replica Count vs Desired",
+          "type": "stat",
+          "gridPos": { "x": 0, "y": 24, "w": 24, "h": 6 },
+          "targets": [
+            {
+              "expr": "kube_deployment_status_available_replicas{namespace=~\"$namespace\"}",
+              "legendFormat": "{{ deployment }} available"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": { "unit": "short", "color": { "mode": "thresholds" },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "red", "value": null },
+                  { "color": "green", "value": 1 }
+                ]
+              }
+            }
+          }
+        }
+      ]
+    }

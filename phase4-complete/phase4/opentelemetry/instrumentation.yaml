@@ -1,0 +1,94 @@
+# opentelemetry/instrumentation.yaml
+#
+# OpenTelemetry Operator auto-instruments services without code changes.
+# It injects the OTEL SDK as an init container and sets env vars.
+#
+# Install operator:
+#   helm repo add open-telemetry https://open-telemetry.github.io/opentelemetry-helm-charts
+#   helm upgrade --install opentelemetry-operator open-telemetry/opentelemetry-operator \
+#     --namespace monitoring \
+#     --set "manager.collectorImage.repository=otel/opentelemetry-collector-contrib"
+
+# ── Python (FastAPI / ML Inference) ──────────────────────────────────────
+apiVersion: opentelemetry.io/v1alpha1
+kind: Instrumentation
+metadata:
+  name: python-instrumentation
+  namespace: prod
+spec:
+  exporter:
+    endpoint: http://otel-collector.monitoring:4318   # HTTP
+  propagators:
+    - tracecontext
+    - baggage
+    - b3                    # for services that use B3 propagation
+  python:
+    env:
+      - name: OTEL_LOGS_EXPORTER
+        value: otlp
+      - name: OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED
+        value: "true"
+---
+# ── Java (Spring Boot — Inventory, Event Sourcing) ───────────────────────
+apiVersion: opentelemetry.io/v1alpha1
+kind: Instrumentation
+metadata:
+  name: java-instrumentation
+  namespace: prod
+spec:
+  exporter:
+    endpoint: http://otel-collector.monitoring:4317   # gRPC
+  propagators:
+    - tracecontext
+    - baggage
+  java:
+    env:
+      - name: OTEL_INSTRUMENTATION_JDBC_ENABLED
+        value: "true"        # trace all JDBC queries
+      - name: OTEL_INSTRUMENTATION_KAFKA_ENABLED
+        value: "true"        # trace all Kafka produces/consumes
+      - name: OTEL_LOGS_EXPORTER
+        value: otlp
+---
+# ── Node.js (BFF Gateway, Notification) ──────────────────────────────────
+apiVersion: opentelemetry.io/v1alpha1
+kind: Instrumentation
+metadata:
+  name: nodejs-instrumentation
+  namespace: prod
+spec:
+  exporter:
+    endpoint: http://otel-collector.monitoring:4318
+  propagators:
+    - tracecontext
+    - baggage
+  nodejs:
+    env:
+      - name: OTEL_LOGS_EXPORTER
+        value: otlp
+---
+# ── Annotate Deployments to enable auto-instrumentation ──────────────────
+# Add these annotations to your Helm chart Deployment templates:
+#
+# For Python services:
+#   instrumentation.opentelemetry.io/inject-python: "true"
+#
+# For Java services:
+#   instrumentation.opentelemetry.io/inject-java: "true"
+#
+# For Node.js services:
+#   instrumentation.opentelemetry.io/inject-nodejs: "true"
+#
+# The operator will automatically inject the SDK — no code changes needed.
+
+# Example patch for the python-ml-inference Helm chart deployment:
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: python-ml-inference
+  namespace: prod
+spec:
+  template:
+    metadata:
+      annotations:
+        instrumentation.opentelemetry.io/inject-python: "true"

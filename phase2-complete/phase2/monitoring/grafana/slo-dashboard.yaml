@@ -1,0 +1,131 @@
+# monitoring/grafana/slo-dashboard.yaml
+#
+# SLO (Service Level Objective) dashboard.
+# Shows error budgets for each service — how much of your reliability
+# budget you have left this month.
+#
+# SLO definitions used here:
+#   Availability SLO: 99.9% of requests succeed (error budget = 0.1% = 43.8 min/month)
+#   Latency SLO:      95% of requests complete in < 500ms
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: slo-dashboard
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+data:
+  slo.json: |
+    {
+      "title": "SLO — Error Budgets",
+      "uid": "slo-error-budgets",
+      "schemaVersion": 38,
+      "refresh": "1m",
+      "time": { "from": "now-30d", "to": "now" },
+      "panels": [
+        {
+          "title": "Availability SLO — 30d (target: 99.9%)",
+          "type": "gauge",
+          "gridPos": { "x": 0, "y": 0, "w": 8, "h": 8 },
+          "targets": [
+            {
+              "expr": "(1 - (sum(increase(http_requests_total{status=~\"5..\", service=\"python-url-shortener\"}[30d])) / sum(increase(http_requests_total{service=\"python-url-shortener\"}[30d])))) * 100",
+              "legendFormat": "URL Shortener"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percent",
+              "min": 99,
+              "max": 100,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "red",    "value": null },
+                  { "color": "yellow", "value": 99.5 },
+                  { "color": "green",  "value": 99.9 }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "title": "Error Budget Remaining — All Services",
+          "type": "bargauge",
+          "gridPos": { "x": 8, "y": 0, "w": 16, "h": 8 },
+          "targets": [
+            {
+              "expr": "(0.001 - (sum(increase(http_requests_total{status=~\"5..\"}[30d])) by (service) / sum(increase(http_requests_total[30d])) by (service))) / 0.001 * 100",
+              "legendFormat": "{{ service }}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percent",
+              "min": 0,
+              "max": 100,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "red",    "value": null  },
+                  { "color": "yellow", "value": 25 },
+                  { "color": "green",  "value": 50 }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "title": "Latency SLO — P95 < 500ms (7d)",
+          "type": "timeseries",
+          "gridPos": { "x": 0, "y": 8, "w": 24, "h": 8 },
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[5m])) by (service, le)) * 1000",
+              "legendFormat": "p95 {{ service }}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "ms",
+              "custom": {
+                "thresholdsStyle": { "mode": "line" }
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "red",   "value": 500 }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "title": "Burn Rate Alert (1h window)",
+          "description": "If burn rate > 14.4x, you will exhaust the monthly error budget in 2 hours",
+          "type": "stat",
+          "gridPos": { "x": 0, "y": 16, "w": 24, "h": 6 },
+          "targets": [
+            {
+              "expr": "sum(rate(http_requests_total{status=~\"5..\"}[1h])) by (service) / sum(rate(http_requests_total[1h])) by (service) / 0.001",
+              "legendFormat": "{{ service }} burn rate"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green",  "value": null },
+                  { "color": "yellow", "value": 2    },
+                  { "color": "red",    "value": 14.4  }
+                ]
+              }
+            }
+          }
+        }
+      ]
+    }

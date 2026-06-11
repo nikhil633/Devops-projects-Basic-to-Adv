@@ -1,0 +1,25 @@
+version: "3.9"
+services:
+  app:
+    build: .
+    ports:
+      - "8100:8100"
+    environment:
+      REDIS_URL: redis://redis:6379
+      PORT: "8100"
+      BATCH_MAX_SIZE: "32"
+      BATCH_WINDOW_MS: "10"
+    volumes:
+      - ./app/models:/app/app/models   # mount models directory
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      retries: 5

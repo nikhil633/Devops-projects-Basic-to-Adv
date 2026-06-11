@@ -1,0 +1,71 @@
+# argocd/image-updater-config.yaml
+# ArgoCD Image Updater watches ECR/ACR for new images.
+# When CI pushes image sha-abc1234, Image Updater:
+#   1. Detects the new tag in the registry
+#   2. Updates the image tag in Git (values.yaml or via write-back annotation)
+#   3. ArgoCD sees the Git change and rolls out the new image
+#
+# This closes the full GitOps loop:
+#   code push → CI builds image → Image Updater updates Git → ArgoCD deploys
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: argocd-image-updater-config
+  namespace: argocd
+data:
+  # Use ECR as the registry (swap for ACR login server for Azure)
+  registries.conf: |
+    registries:
+      - name: AWS ECR
+        api_url: https://<account_id>.dkr.ecr.us-east-1.amazonaws.com
+        prefix: <account_id>.dkr.ecr.us-east-1.amazonaws.com
+        credentials: ext:/scripts/ecr-login.sh
+        insecure: false
+        default: true
+
+      - name: Azure ACR
+        api_url: https://myprojectdevacr.azurecr.io
+        prefix: myprojectdevacr.azurecr.io
+        credentials: secret:argocd/acr-credentials#token
+        insecure: false
+---
+# Annotation-driven image update config
+# Add these annotations to each ArgoCD Application:
+#
+# argocd-image-updater.argoproj.io/image-list: app=<ecr_url>/python-url-shortener
+# argocd-image-updater.argoproj.io/app.update-strategy: newest-build
+# argocd-image-updater.argoproj.io/app.helm.image-name: image.repository
+# argocd-image-updater.argoproj.io/app.helm.image-tag: image.tag
+# argocd-image-updater.argoproj.io/write-back-method: git
+# argocd-image-updater.argoproj.io/git-branch: main
+
+# Example Application with Image Updater annotations
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: python-url-shortener-dev-managed
+  namespace: argocd
+  annotations:
+    argocd-image-updater.argoproj.io/image-list: >
+      app=<account_id>.dkr.ecr.us-east-1.amazonaws.com/myproject/dev/python-url-shortener
+    argocd-image-updater.argoproj.io/app.update-strategy: newest-build
+    argocd-image-updater.argoproj.io/app.helm.image-name: image.repository
+    argocd-image-updater.argoproj.io/app.helm.image-tag: image.tag
+    argocd-image-updater.argoproj.io/write-back-method: git
+    argocd-image-updater.argoproj.io/git-branch: main
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/your-org/your-repo.git
+    targetRevision: HEAD
+    path: helm/charts/python-url-shortener
+    helm:
+      valueFiles: [values.yaml, values-dev.yaml]
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: dev
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true

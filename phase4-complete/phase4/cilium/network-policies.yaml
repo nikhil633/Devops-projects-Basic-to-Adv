@@ -1,0 +1,191 @@
+# cilium/network-policies.yaml
+#
+# Cilium uses eBPF to enforce network policies at the kernel level.
+# These are more powerful than standard Kubernetes NetworkPolicies:
+#   - L7 policies (can inspect HTTP paths, not just ports)
+#   - DNS-based policies (allow egress to api.example.com, not just IPs)
+#   - FQDN-based egress
+#   - Identity-based (SPIFFE/Istio identity, not just IP)
+#
+# Install Cilium as the CNI (replaces kube-proxy):
+#   helm repo add cilium https://helm.cilium.io
+#   helm upgrade --install cilium cilium/cilium \
+#     --namespace kube-system \
+#     --set kubeProxyReplacement=true \
+#     --set hubble.relay.enabled=true \
+#     --set hubble.ui.enabled=true
+
+# ── Policy: BFF Gateway ───────────────────────────────────────────────────
+# BFF can: receive from ingress, call upstream services, call Redis
+# BFF cannot: call external internet directly, access other namespaces
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: bff-gateway-policy
+  namespace: prod
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: nodejs-bff-gateway
+
+  ingress:
+    # Accept traffic from Istio ingress gateway
+    - fromEndpoints:
+        - matchLabels:
+            app: istio-ingressgateway
+            io.kubernetes.pod.namespace: istio-system
+      toPorts:
+        - ports:
+            - port: "4000"
+              protocol: TCP
+
+    # Accept Prometheus scraping
+    - fromEndpoints:
+        - matchLabels:
+            app: prometheus
+            io.kubernetes.pod.namespace: monitoring
+      toPorts:
+        - ports:
+            - port: "9090"
+              protocol: TCP
+
+  egress:
+    # Allow calls to upstream services in same namespace
+    - toEndpoints:
+        - matchLabels:
+            io.kubernetes.pod.namespace: prod
+      toPorts:
+        - ports:
+            - port: "8080"   # go-auth, java-inventory
+              protocol: TCP
+            - port: "3000"   # nodejs-notification
+              protocol: TCP
+            - port: "8000"   # python-url-shortener
+              protocol: TCP
+            - port: "9000"   # rust-ratelimiter
+              protocol: TCP
+
+    # Allow Redis
+    - toEndpoints:
+        - matchLabels:
+            app: redis
+      toPorts:
+        - ports:
+            - port: "6379"
+              protocol: TCP
+
+    # Allow DNS resolution
+    - toEndpoints:
+        - matchLabels:
+            io.kubernetes.pod.namespace: kube-system
+            k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: ANY
+          rules:
+            dns:
+              - matchPattern: "*"
+---
+# ── Policy: Python ML Inference ──────────────────────────────────────────
+# ML service can only receive from BFF and Prometheus
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: ml-inference-policy
+  namespace: prod
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: python-ml-inference
+
+  ingress:
+    - fromEndpoints:
+        - matchLabels:
+            app.kubernetes.io/name: nodejs-bff-gateway
+      toPorts:
+        - ports:
+            - port: "8100"
+              protocol: TCP
+    - fromEndpoints:
+        - matchLabels:
+            app: prometheus
+            io.kubernetes.pod.namespace: monitoring
+      toPorts:
+        - ports:
+            - port: "8100"
+              protocol: TCP
+
+  egress:
+    # Redis only
+    - toEndpoints:
+        - matchLabels:
+            app: redis
+      toPorts:
+        - ports:
+            - port: "6379"
+              protocol: TCP
+    # DNS
+    - toEndpoints:
+        - matchLabels:
+            k8s-app: kube-dns
+            io.kubernetes.pod.namespace: kube-system
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: ANY
+---
+# ── Policy: Java Event Sourcing ──────────────────────────────────────────
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: java-event-sourcing-policy
+  namespace: prod
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: java-event-sourcing
+
+  ingress:
+    - fromEndpoints:
+        - matchLabels:
+            app.kubernetes.io/name: nodejs-bff-gateway
+      toPorts:
+        - ports:
+            - port: "8200"
+              protocol: TCP
+    - fromEndpoints:
+        - matchLabels:
+            app: prometheus
+            io.kubernetes.pod.namespace: monitoring
+      toPorts:
+        - ports:
+            - port: "8200"
+              protocol: TCP
+
+  egress:
+    # PostgreSQL
+    - toEndpoints:
+        - matchLabels:
+            app: postgresql
+      toPorts:
+        - ports:
+            - port: "5432"
+              protocol: TCP
+    # Kafka
+    - toEndpoints:
+        - matchLabels:
+            app: kafka
+      toPorts:
+        - ports:
+            - port: "9092"
+              protocol: TCP
+    # DNS
+    - toEndpoints:
+        - matchLabels:
+            k8s-app: kube-dns
+            io.kubernetes.pod.namespace: kube-system
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: ANY

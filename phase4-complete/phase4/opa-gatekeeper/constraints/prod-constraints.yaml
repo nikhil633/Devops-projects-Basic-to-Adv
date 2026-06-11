@@ -1,0 +1,85 @@
+# opa-gatekeeper/constraints/prod-constraints.yaml
+# Instantiates the ConstraintTemplates for the prod namespace.
+# enforcementAction: deny  → reject the resource (hard block)
+# enforcementAction: warn  → allow but emit warning (use during rollout)
+
+# ── Enforce resource limits in prod ──────────────────────────────────────
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: K8sRequiredResourceLimits
+metadata:
+  name: prod-require-resource-limits
+spec:
+  enforcementAction: deny
+  match:
+    kinds:
+      - apiGroups: ["apps"]
+        kinds: ["Deployment", "StatefulSet", "DaemonSet"]
+    namespaces: ["prod"]
+---
+# ── Block privilege escalation in prod ────────────────────────────────────
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: K8sPSPAllowPrivilegeEscalationContainer
+metadata:
+  name: prod-no-privilege-escalation
+spec:
+  enforcementAction: deny
+  match:
+    kinds:
+      - apiGroups: [""]
+        kinds: ["Pod"]
+    namespaces: ["prod"]
+---
+# ── Block :latest image tags in prod (warn in dev/staging) ────────────────
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: K8sRequiredImmageTag
+metadata:
+  name: prod-require-immutable-tags
+spec:
+  enforcementAction: deny
+  match:
+    kinds:
+      - apiGroups: ["apps"]
+        kinds: ["Deployment"]
+    namespaces: ["prod"]
+---
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: K8sRequiredImmageTag
+metadata:
+  name: dev-warn-immutable-tags
+spec:
+  enforcementAction: warn     # only warn in dev — don't block
+  match:
+    kinds:
+      - apiGroups: ["apps"]
+        kinds: ["Deployment"]
+    namespaces: ["dev", "staging"]
+---
+# ── Require read-only root filesystem ────────────────────────────────────
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: K8sPSPReadOnlyRootFilesystem
+metadata:
+  name: prod-readonly-rootfs
+spec:
+  enforcementAction: deny
+  match:
+    kinds:
+      - apiGroups: [""]
+        kinds: ["Pod"]
+    namespaces: ["prod"]
+---
+# ── Require standard labels on all Deployments ───────────────────────────
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: K8sRequiredLabels
+metadata:
+  name: require-standard-labels
+spec:
+  enforcementAction: deny
+  match:
+    kinds:
+      - apiGroups: ["apps"]
+        kinds: ["Deployment"]
+    namespaces: ["prod", "staging"]
+  parameters:
+    labels:
+      - "app.kubernetes.io/name"
+      - "app.kubernetes.io/version"

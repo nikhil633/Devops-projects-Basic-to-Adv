@@ -1,0 +1,31 @@
+version: "3.9"
+services:
+  bff:
+    build: .
+    ports:
+      - "4000:4000"   # GraphQL endpoint
+      - "9090:9090"   # metrics
+    environment:
+      REDIS_URL:                redis://redis:6379
+      AUTH_SERVICE_URL:         http://go-auth:8080
+      INVENTORY_SERVICE_URL:    http://java-inventory:8080
+      NOTIFICATION_SERVICE_URL: http://nodejs-notification:3000
+      URL_SERVICE_URL:          http://python-url-shortener:8000
+      RATE_LIMITER_URL:         http://rust-ratelimiter:9000
+      LOG_LEVEL:                debug
+    depends_on:
+      - redis
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      retries: 5
+
+# In a real deployment, the upstream services would be in the same
+# Kubernetes namespace and reachable by service name.
+# For local testing, start the Phase 1 services separately and
+# set the *_URL env vars to point at them.

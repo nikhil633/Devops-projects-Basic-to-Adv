@@ -1,0 +1,319 @@
+# .github/workflows/python-url-shortener.yml
+# Full CI/CD pipeline for the Python URL Shortener service.
+#
+# Triggers:
+#   push to main         → build + test + push to ECR/ACR + deploy to dev
+#   push to release/**   → same but deploys to staging
+#   manual dispatch      → deploy to prod (requires approval)
+#
+# No stored AWS/Azure credentials — uses OIDC token exchange everywhere.
+
+name: python-url-shortener
+
+on:
+  push:
+    branches: [main, "release/**"]
+    paths:
+      - "python-url-shortener/**"
+      - ".github/workflows/python-url-shortener.yml"
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment"
+        required: true
+        type: choice
+        options: [dev, staging, prod]
+
+env:
+  SERVICE: python-url-shortener
+  IMAGE_NAME: python-url-shortener
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  # ── Job 1: Test ──────────────────────────────────────────────────────────
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: python-url-shortener
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt pytest pytest-asyncio httpx
+
+      - name: Run tests
+        run: pytest tests/ -v --tb=short --junitxml=test-results.xml
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-results
+          path: python-url-shortener/test-results.xml
+
+  # ── Job 2: Build + Scan + Push to ECR (AWS) ──────────────────────────────
+  build-push-ecr:
+    name: Build → Scan → Push ECR
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/')
+    permissions:
+      id-token: write   # required for OIDC
+      contents: read
+      security-events: write
+
+    outputs:
+      image-tag: ${{ steps.meta.outputs.tags }}
+      digest: ${{ steps.build.outputs.digest }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── OIDC auth to AWS (no stored secrets!) ────────────────────────────
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_GITHUB_ACTIONS_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      # ── Build metadata (tags + labels) ───────────────────────────────────
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.login-ecr.outputs.registry }}/${{ vars.PROJECT }}/dev/${{ env.IMAGE_NAME }}
+          tags: |
+            type=sha,prefix=sha-,format=short
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+
+      # ── Multi-arch build with buildx ─────────────────────────────────────
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push image
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: python-url-shortener
+          file: phase2/dockerfiles/python/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # ── Trivy vulnerability scan ──────────────────────────────────────────
+      - name: Run Trivy scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ steps.login-ecr.outputs.registry }}/${{ vars.PROJECT }}/dev/${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
+          format: sarif
+          output: trivy-results.sarif
+          severity: CRITICAL,HIGH
+          exit-code: 1       # fail build on CRITICAL/HIGH vulnerabilities
+
+      - name: Upload Trivy results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-results.sarif
+
+  # ── Job 3: Build + Scan + Push to ACR (Azure) ────────────────────────────
+  build-push-acr:
+    name: Build → Scan → Push ACR
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/')
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── OIDC auth to Azure (no stored secrets!) ───────────────────────────
+      - name: Azure login via OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Login to ACR
+        run: az acr login --name ${{ secrets.ACR_NAME }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push to ACR
+        uses: docker/build-push-action@v5
+        with:
+          context: python-url-shortener
+          file: phase2/dockerfiles/python/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ secrets.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
+            ${{ secrets.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Run Trivy scan (ACR image)
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ secrets.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
+          severity: CRITICAL,HIGH
+          exit-code: 1
+
+  # ── Job 4: Deploy to EKS (dev) ────────────────────────────────────────────
+  deploy-eks-dev:
+    name: Deploy to EKS (dev)
+    runs-on: ubuntu-latest
+    needs: [build-push-ecr]
+    if: github.ref == 'refs/heads/main'
+    environment: dev
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_GITHUB_ACTIONS_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Update kubeconfig for EKS
+        run: |
+          aws eks update-kubeconfig \
+            --region us-east-1 \
+            --name ${{ secrets.EKS_CLUSTER_NAME_DEV }}
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+
+      - name: Deploy with Helm
+        run: |
+          helm upgrade --install ${{ env.SERVICE }} \
+            ./phase2/helm/charts/${{ env.SERVICE }} \
+            --namespace dev \
+            --create-namespace \
+            --values ./phase2/helm/charts/${{ env.SERVICE }}/values.yaml \
+            --values ./phase2/helm/charts/${{ env.SERVICE }}/values-dev.yaml \
+            --set image.repository=${{ steps.login-ecr.outputs.registry }}/${{ vars.PROJECT }}/dev/${{ env.IMAGE_NAME }} \
+            --set image.tag=sha-${{ github.sha }} \
+            --wait \
+            --timeout 5m \
+            --atomic    # auto-rollback if deployment fails
+
+      - name: Verify deployment
+        run: |
+          kubectl rollout status deployment/${{ env.SERVICE }}-${{ env.SERVICE }} \
+            -n dev --timeout=3m
+
+  # ── Job 5: Deploy to AKS (dev) ───────────────────────────────────────────
+  deploy-aks-dev:
+    name: Deploy to AKS (dev)
+    runs-on: ubuntu-latest
+    needs: [build-push-acr]
+    if: github.ref == 'refs/heads/main'
+    environment: dev
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Get AKS credentials
+        uses: azure/aks-set-context@v4
+        with:
+          resource-group: ${{ secrets.AKS_RESOURCE_GROUP_DEV }}
+          cluster-name: ${{ secrets.AKS_CLUSTER_NAME_DEV }}
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+
+      - name: Deploy with Helm
+        run: |
+          helm upgrade --install ${{ env.SERVICE }} \
+            ./phase2/helm/charts/${{ env.SERVICE }} \
+            --namespace dev \
+            --create-namespace \
+            --values ./phase2/helm/charts/${{ env.SERVICE }}/values.yaml \
+            --values ./phase2/helm/charts/${{ env.SERVICE }}/values-dev.yaml \
+            --set image.repository=${{ secrets.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }} \
+            --set image.tag=sha-${{ github.sha }} \
+            --set ingress.className=azure/application-gateway \
+            --wait \
+            --timeout 5m \
+            --atomic
+
+  # ── Job 6: Deploy to prod (manual approval required) ─────────────────────
+  deploy-prod:
+    name: Deploy to Prod (EKS + AKS)
+    runs-on: ubuntu-latest
+    needs: [build-push-ecr, build-push-acr]
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'prod'
+    environment:
+      name: prod
+      # Configure "Required reviewers" in GitHub Environments settings
+      # This job will pause here until a human approves
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_GITHUB_ACTIONS_ROLE_ARN_PROD }}
+          aws-region: us-east-1
+
+      - name: Update kubeconfig for EKS prod
+        run: |
+          aws eks update-kubeconfig \
+            --region us-east-1 \
+            --name ${{ secrets.EKS_CLUSTER_NAME_PROD }}
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+
+      - name: Deploy to EKS prod
+        run: |
+          helm upgrade --install ${{ env.SERVICE }} \
+            ./phase2/helm/charts/${{ env.SERVICE }} \
+            --namespace prod \
+            --create-namespace \
+            --values ./phase2/helm/charts/${{ env.SERVICE }}/values.yaml \
+            --values ./phase2/helm/charts/${{ env.SERVICE }}/values-prod.yaml \
+            --set image.repository=${{ steps.login-ecr.outputs.registry }}/${{ vars.PROJECT }}/prod/${{ env.IMAGE_NAME }} \
+            --set image.tag=sha-${{ github.sha }} \
+            --wait \
+            --timeout 10m \
+            --atomic

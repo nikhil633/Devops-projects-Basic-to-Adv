@@ -1,0 +1,210 @@
+# istio/virtualservices/all-services.yaml
+#
+# VirtualService = traffic routing rules INSIDE the mesh.
+# Defines: which requests go where, retries, timeouts, fault injection.
+#
+# Applied per service. Each VirtualService below controls routing
+# for one of the Phase 3 microservices.
+
+# ── BFF Gateway ─────────────────────────────────────────────────────────────
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: bff-gateway
+  namespace: prod
+spec:
+  hosts:
+    - api.example.com              # external hostname (matches Gateway)
+    - nodejs-bff-gateway           # internal k8s service name
+  gateways:
+    - istio-system/main-gateway
+    - mesh                         # also applies for internal traffic
+  http:
+    - match:
+        - uri:
+            prefix: /graphql
+        - uri:
+            exact: /health
+        - uri:
+            exact: /metrics
+      route:
+        - destination:
+            host: nodejs-bff-gateway
+            port:
+              number: 4000
+          weight: 100
+      timeout: 30s
+      retries:
+        attempts: 3
+        perTryTimeout: 10s
+        retryOn: 5xx,reset,connect-failure,retriable-4xx
+---
+# ── Go Auth Service ────────────────────────────────────────────────────────
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: go-auth
+  namespace: prod
+spec:
+  hosts:
+    - go-auth
+  gateways:
+    - mesh
+  http:
+    - route:
+        - destination:
+            host: go-auth
+            port:
+              number: 8080
+      timeout: 5s
+      retries:
+        attempts: 2
+        perTryTimeout: 3s
+        # Don't retry on POST /auth/login — not idempotent
+        retryOn: connect-failure,reset
+---
+# ── Java Inventory ─────────────────────────────────────────────────────────
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: java-inventory
+  namespace: prod
+spec:
+  hosts:
+    - java-inventory
+  gateways:
+    - mesh
+  http:
+    # GET requests: aggressive retry
+    - match:
+        - method:
+            exact: GET
+      route:
+        - destination:
+            host: java-inventory
+            port:
+              number: 8080
+      timeout: 10s
+      retries:
+        attempts: 3
+        perTryTimeout: 5s
+        retryOn: 5xx,reset,connect-failure
+    # Mutations: single attempt, longer timeout
+    - route:
+        - destination:
+            host: java-inventory
+            port:
+              number: 8080
+      timeout: 15s
+---
+# ── Rust Rate Limiter ──────────────────────────────────────────────────────
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: rust-ratelimiter
+  namespace: prod
+spec:
+  hosts:
+    - rust-ratelimiter
+  gateways:
+    - mesh
+  http:
+    - route:
+        - destination:
+            host: rust-ratelimiter
+            port:
+              number: 9000
+      timeout: 200ms   # rate limiter must be fast — fail open if slow
+      # No retries on rate limiter — idempotent but could mask real limits
+---
+# ── Rust Real-time Chat ────────────────────────────────────────────────────
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: rust-realtime-chat
+  namespace: prod
+spec:
+  hosts:
+    - chat.example.com
+    - rust-realtime-chat
+  gateways:
+    - istio-system/main-gateway
+    - mesh
+  http:
+    # WebSocket upgrade requests
+    - match:
+        - headers:
+            upgrade:
+              exact: websocket
+      route:
+        - destination:
+            host: rust-realtime-chat
+            port:
+              number: 7000
+      timeout: 3600s     # WebSocket connections stay open for 1 hour
+    # Regular HTTP (REST endpoints)
+    - route:
+        - destination:
+            host: rust-realtime-chat
+            port:
+              number: 7000
+      timeout: 10s
+      retries:
+        attempts: 3
+        perTryTimeout: 3s
+        retryOn: 5xx,reset,connect-failure
+---
+# ── Python ML Inference ────────────────────────────────────────────────────
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: python-ml-inference
+  namespace: prod
+spec:
+  hosts:
+    - python-ml-inference
+  gateways:
+    - mesh
+  http:
+    - route:
+        - destination:
+            host: python-ml-inference
+            port:
+              number: 8100
+      timeout: 60s       # ML inference can be slow — generous timeout
+      retries:
+        attempts: 2
+        perTryTimeout: 30s
+        retryOn: 5xx,reset,connect-failure
+---
+# ── Java Event Sourcing ────────────────────────────────────────────────────
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: java-event-sourcing
+  namespace: prod
+spec:
+  hosts:
+    - java-event-sourcing
+  gateways:
+    - mesh
+  http:
+    - match:
+        - method:
+            exact: GET
+      route:
+        - destination:
+            host: java-event-sourcing
+            port:
+              number: 8200
+      timeout: 5s
+      retries:
+        attempts: 3
+        perTryTimeout: 3s
+        retryOn: 5xx,reset,connect-failure
+    - route:
+        - destination:
+            host: java-event-sourcing
+            port:
+              number: 8200
+      timeout: 10s

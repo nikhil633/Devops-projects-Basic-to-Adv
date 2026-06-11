@@ -1,0 +1,20 @@
+[package]
+name = "realtime-chat"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "realtime-chat"
+path = "src/main.rs"
+
+[dependencies]
+axum            = { version = "0.7", features = ["ws"] }
+tokio           = { version = "1",   features = ["full"] }
+futures-util    = "0.3"
+serde           = { version = "1",   features = ["derive"] }
+serde_json      = "1"
+redis           = { version = "0.25", features = ["tokio-comp", "aio"] }
+uuid            = { version = "1",   features = ["v4"] }
+prometheus      = "0.13"
+tracing         = "0.1"
+tracing-subscriber = "0.3"

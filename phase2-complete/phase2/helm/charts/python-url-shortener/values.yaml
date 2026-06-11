@@ -1,0 +1,95 @@
+# helm/charts/python-url-shortener/values.yaml
+# These are the DEFAULT values. Overridden per-env by values-dev/staging/prod.yaml
+
+replicaCount: 2
+
+image:
+  repository: ""       # set by CI: <ecr_or_acr_url>/python-url-shortener
+  tag: "latest"        # set by CI: sha-<git_sha>
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 8000
+
+ingress:
+  enabled: true
+  className: "nginx"   # override to "azure/application-gateway" for AKS + AGIC
+  annotations: {}
+  hosts:
+    - host: url-shortener.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+# Resource requests/limits — set conservatively, tune from Grafana
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+# Horizontal Pod Autoscaler
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+
+# Liveness and readiness probes
+livenessProbe:
+  httpGet:
+    path: /health
+    port: 8000
+  initialDelaySeconds: 10
+  periodSeconds: 15
+  failureThreshold: 3
+
+readinessProbe:
+  httpGet:
+    path: /health
+    port: 8000
+  initialDelaySeconds: 5
+  periodSeconds: 10
+  failureThreshold: 3
+
+# Environment variables injected into the pod
+env:
+  REDIS_URL: "redis://redis:6379"
+  LOG_LEVEL: "info"
+
+# Kubernetes secret references (created separately via Sealed Secrets / Key Vault CSI)
+envFromSecret: ""   # name of the Kubernetes Secret to inject
+
+# Pod Disruption Budget — ensures at least 1 pod stays up during node drain
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+# ServiceMonitor for Prometheus scraping
+serviceMonitor:
+  enabled: true
+  interval: 30s
+  path: /metrics
+  port: 8000
+
+# Node affinity — prefer app nodes
+nodeSelector:
+  role: app
+
+tolerations: []
+
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          topologyKey: kubernetes.io/hostname
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: python-url-shortener

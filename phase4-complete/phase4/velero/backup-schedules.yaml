@@ -1,0 +1,102 @@
+# velero/backup-schedules.yaml
+#
+# Velero = Kubernetes cluster backup and restore.
+# It backs up:
+#   - All Kubernetes resources (Deployments, ConfigMaps, Secrets, CRDs, etc.)
+#   - Persistent Volume data (snapshotted via cloud provider CSI driver)
+#
+# ── Disaster recovery scenarios Velero solves ─────────────────────────────
+#   1. Cluster deleted by mistake → restore to new cluster from backup
+#   2. Namespace deleted → restore just that namespace
+#   3. ConfigMap corrupted → restore single resource
+#   4. Region outage → restore to backup cluster in another region
+#
+# Install:
+#   velero install \
+#     --provider aws \                         # or azure
+#     --plugins velero/velero-plugin-for-aws \
+#     --bucket my-velero-backups \
+#     --backup-location-config region=us-east-1 \
+#     --snapshot-location-config region=us-east-1 \
+#     --secret-file ./credentials-velero
+
+# ── Schedule 1: Full cluster backup — daily at 2am ────────────────────────
+apiVersion: velero.io/v1
+kind: Schedule
+metadata:
+  name: daily-full-backup
+  namespace: velero
+spec:
+  schedule: "0 2 * * *"     # daily at 02:00 UTC
+  template:
+    includedNamespaces:
+      - prod
+      - staging
+      - monitoring
+      - argocd
+      - istio-system
+    excludedResources:
+      - events                 # events are ephemeral — no need to back them up
+      - events.events.k8s.io
+    storageLocation: default   # configured during velero install
+    volumeSnapshotLocations:
+      - default
+    ttl: 720h                  # keep backups for 30 days
+    snapshotVolumes: true      # snapshot PVCs (PostgreSQL data, Redis AOF)
+    defaultVolumesToFsBackup: false
+    metadata:
+      labels:
+        schedule: daily
+        environment: production
+---
+# ── Schedule 2: Prod namespace only — hourly (critical data) ──────────────
+apiVersion: velero.io/v1
+kind: Schedule
+metadata:
+  name: hourly-prod-backup
+  namespace: velero
+spec:
+  schedule: "0 * * * *"     # every hour
+  template:
+    includedNamespaces:
+      - prod
+    storageLocation: default
+    volumeSnapshotLocations:
+      - default
+    ttl: 168h                  # keep 7 days of hourly backups
+    snapshotVolumes: true
+    metadata:
+      labels:
+        schedule: hourly
+        environment: production
+---
+# ── Backup Location (where backups are stored) ────────────────────────────
+# AWS S3
+apiVersion: velero.io/v1
+kind: BackupStorageLocation
+metadata:
+  name: default
+  namespace: velero
+spec:
+  provider: aws
+  objectStorage:
+    bucket: my-velero-backups
+    prefix: eks-prod
+  config:
+    region: us-east-1
+    kmsKeyId: "arn:aws:kms:us-east-1:ACCOUNT:key/KEY-ID"   # encrypt backups
+---
+# Azure Blob (for AKS)
+apiVersion: velero.io/v1
+kind: BackupStorageLocation
+metadata:
+  name: azure-default
+  namespace: velero
+spec:
+  provider: azure
+  objectStorage:
+    bucket: velero-backups      # Azure Storage container name
+    prefix: aks-prod
+  config:
+    resourceGroup: my-project-prod-rg
+    storageAccount: myprojectvelero

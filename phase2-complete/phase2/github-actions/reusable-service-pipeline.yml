@@ -1,0 +1,183 @@
+# .github/workflows/reusable-service-pipeline.yml
+# Reusable workflow called by all other service pipelines.
+# This avoids copy-pasting the same 300 lines for each of the 5 services.
+#
+# Usage in a service pipeline:
+#   jobs:
+#     pipeline:
+#       uses: ./.github/workflows/reusable-service-pipeline.yml
+#       with:
+#         service: nodejs-notification
+#         context: nodejs-notification
+#         dockerfile: phase2/dockerfiles/nodejs/Dockerfile
+#         port: "3000"
+#       secrets: inherit
+
+name: Reusable Service Pipeline
+
+on:
+  workflow_call:
+    inputs:
+      service:
+        required: true
+        type: string
+        description: "Service name (matches helm chart directory name)"
+      context:
+        required: true
+        type: string
+        description: "Docker build context directory"
+      dockerfile:
+        required: true
+        type: string
+        description: "Path to Dockerfile"
+      port:
+        required: true
+        type: string
+        description: "Container port"
+      test-command:
+        required: false
+        type: string
+        default: ""
+        description: "Override test command"
+
+jobs:
+  test:
+    name: Test (${{ inputs.service }})
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.context }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run tests (auto-detect language)
+        run: |
+          if [ -f "requirements.txt" ]; then
+            pip install -r requirements.txt pytest pytest-asyncio httpx
+            pytest tests/ -v
+          elif [ -f "package.json" ]; then
+            npm ci && npm test
+          elif [ -f "go.mod" ]; then
+            go test ./... -v -race
+          elif [ -f "Cargo.toml" ]; then
+            cargo test
+          elif [ -f "pom.xml" ]; then
+            ./mvnw test -q
+          fi
+
+  build-and-deploy:
+    name: Build → Scan → Deploy (${{ inputs.service }})
+    runs-on: ubuntu-latest
+    needs: test
+    permissions:
+      id-token: write
+      contents: read
+      security-events: write
+
+    strategy:
+      matrix:
+        cloud: [aws, azure]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── AWS path ──────────────────────────────────────────────────────────
+      - name: Configure AWS credentials
+        if: matrix.cloud == 'aws'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_GITHUB_ACTIONS_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Login to ECR
+        if: matrix.cloud == 'aws'
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      # ── Azure path ────────────────────────────────────────────────────────
+      - name: Azure login
+        if: matrix.cloud == 'azure'
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Login to ACR
+        if: matrix.cloud == 'azure'
+        run: az acr login --name ${{ secrets.ACR_NAME }}
+
+      # ── Build (shared) ────────────────────────────────────────────────────
+      - name: Set image reference
+        id: image-ref
+        run: |
+          SHA_TAG="sha-$(echo ${{ github.sha }} | cut -c1-7)"
+          if [ "${{ matrix.cloud }}" = "aws" ]; then
+            echo "ref=${{ steps.login-ecr.outputs.registry }}/${{ vars.PROJECT }}/dev/${{ inputs.service }}:${SHA_TAG}" >> $GITHUB_OUTPUT
+          else
+            echo "ref=${{ secrets.ACR_LOGIN_SERVER }}/${{ inputs.service }}:${SHA_TAG}" >> $GITHUB_OUTPUT
+          fi
+          echo "tag=${SHA_TAG}" >> $GITHUB_OUTPUT
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ inputs.context }}
+          file: ${{ inputs.dockerfile }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.image-ref.outputs.ref }}
+          cache-from: type=gha,scope=${{ inputs.service }}-${{ matrix.cloud }}
+          cache-to: type=gha,mode=max,scope=${{ inputs.service }}-${{ matrix.cloud }}
+
+      - name: Trivy scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ steps.image-ref.outputs.ref }}
+          severity: CRITICAL,HIGH
+          exit-code: 1
+
+      # ── Deploy to EKS ─────────────────────────────────────────────────────
+      - name: Update EKS kubeconfig
+        if: matrix.cloud == 'aws' && github.ref == 'refs/heads/main'
+        run: aws eks update-kubeconfig --region us-east-1 --name ${{ secrets.EKS_CLUSTER_NAME_DEV }}
+
+      - name: Helm deploy to EKS
+        if: matrix.cloud == 'aws' && github.ref == 'refs/heads/main'
+        uses: azure/setup-helm@v4
+        with:
+          version: latest
+      - run: |
+          helm upgrade --install ${{ inputs.service }} \
+            ./phase2/helm/charts/${{ inputs.service }} \
+            -n dev --create-namespace \
+            -f ./phase2/helm/charts/${{ inputs.service }}/values.yaml \
+            -f ./phase2/helm/charts/${{ inputs.service }}/values-dev.yaml \
+            --set image.repository=$(echo "${{ steps.image-ref.outputs.ref }}" | cut -d: -f1) \
+            --set image.tag=${{ steps.image-ref.outputs.tag }} \
+            --wait --timeout 5m --atomic
+        if: matrix.cloud == 'aws' && github.ref == 'refs/heads/main'
+
+      # ── Deploy to AKS ─────────────────────────────────────────────────────
+      - name: Get AKS credentials
+        if: matrix.cloud == 'azure' && github.ref == 'refs/heads/main'
+        uses: azure/aks-set-context@v4
+        with:
+          resource-group: ${{ secrets.AKS_RESOURCE_GROUP_DEV }}
+          cluster-name: ${{ secrets.AKS_CLUSTER_NAME_DEV }}
+
+      - name: Helm deploy to AKS
+        if: matrix.cloud == 'azure' && github.ref == 'refs/heads/main'
+        run: |
+          helm upgrade --install ${{ inputs.service }} \
+            ./phase2/helm/charts/${{ inputs.service }} \
+            -n dev --create-namespace \
+            -f ./phase2/helm/charts/${{ inputs.service }}/values.yaml \
+            -f ./phase2/helm/charts/${{ inputs.service }}/values-dev.yaml \
+            --set image.repository=$(echo "${{ steps.image-ref.outputs.ref }}" | cut -d: -f1) \
+            --set image.tag=${{ steps.image-ref.outputs.tag }} \
+            --set ingress.className=azure/application-gateway \
+            --wait --timeout 5m --atomic

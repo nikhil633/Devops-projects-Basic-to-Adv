@@ -1,0 +1,103 @@
+# argocd/applicationset.yaml
+# ApplicationSet generates one ArgoCD Application per service per environment.
+# With 5 services × 3 environments = 15 Applications, all managed from one file.
+#
+# How ArgoCD works:
+#   1. This ApplicationSet is applied once to the ArgoCD cluster.
+#   2. ArgoCD watches the Git repo for changes to Helm chart values.
+#   3. When CI updates values-<env>.yaml (new image tag), ArgoCD detects
+#      the diff and automatically syncs the deployment to the cluster.
+#   4. If the rollout fails (health checks fail), ArgoCD can auto-rollback.
+
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: all-services
+  namespace: argocd
+spec:
+  # Matrix generator: cartesian product of services × environments
+  generators:
+    - matrix:
+        generators:
+          - list:
+              elements:
+                - service: python-url-shortener
+                  port: "8000"
+                - service: nodejs-notification
+                  port: "3000"
+                - service: go-auth
+                  port: "8080"
+                - service: rust-ratelimiter
+                  port: "9000"
+                - service: java-inventory
+                  port: "8080"
+          - list:
+              elements:
+                - env: dev
+                  cluster: https://kubernetes.default.svc   # in-cluster
+                  namespace: dev
+                  valuesFile: values-dev.yaml
+                  autoSync: "true"
+                  selfHeal: "true"
+                - env: staging
+                  cluster: https://staging-cluster-endpoint  # replace with real
+                  namespace: staging
+                  valuesFile: values-staging.yaml
+                  autoSync: "true"
+                  selfHeal: "true"
+                - env: prod
+                  cluster: https://prod-cluster-endpoint     # replace with real
+                  namespace: prod
+                  valuesFile: values-prod.yaml
+                  autoSync: "false"    # manual sync in prod — human approval
+                  selfHeal: "false"
+
+  template:
+    metadata:
+      name: "{{service}}-{{env}}"
+      labels:
+        service: "{{service}}"
+        environment: "{{env}}"
+      annotations:
+        # Notify Slack on sync events (requires argocd-notifications)
+        notifications.argoproj.io/subscribe.on-sync-succeeded.slack: devops-alerts
+        notifications.argoproj.io/subscribe.on-sync-failed.slack: devops-alerts
+
+    spec:
+      project: default
+
+      source:
+        repoURL: https://github.com/your-org/your-repo.git  # replace
+        targetRevision: HEAD
+        path: "helm/charts/{{service}}"
+        helm:
+          valueFiles:
+            - values.yaml
+            - "{{valuesFile}}"
+
+      destination:
+        server: "{{cluster}}"
+        namespace: "{{namespace}}"
+
+      syncPolicy:
+        automated:
+          prune: "{{autoSync}}"       # delete resources removed from Helm chart
+          selfHeal: "{{selfHeal}}"    # revert manual kubectl changes
+          allowEmpty: false
+        syncOptions:
+          - CreateNamespace=true      # create namespace if it doesn't exist
+          - PrunePropagationPolicy=foreground
+          - RespectIgnoreDifferences=true
+        retry:
+          limit: 3
+          backoff:
+            duration: 5s
+            factor: 2
+            maxDuration: 3m
+
+      # Health assessment — ArgoCD checks these before marking sync complete
+      ignoreDifferences:
+        - group: apps
+          kind: Deployment
+          jsonPointers:
+            - /spec/replicas  # ignore HPA-managed replica count
