@@ -1,0 +1,1 @@
+crate VPC, subnet, Route table, Internet gateway, ec2, Security compute. and VPC Peering 
