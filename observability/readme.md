@@ -1,3 +1,10 @@
+eksctl utils associate-iam-oidc-provider \
+    --region us-east-1 \
+    --cluster observability \
+    --approve
+
+
+
 Install all using helm or any
 
 login to node and check with ip of prometheus-node-exporter and port number U get metrics
