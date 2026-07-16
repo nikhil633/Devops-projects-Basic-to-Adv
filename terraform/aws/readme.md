@@ -282,3 +282,30 @@ VPC
 
 
 
+
+
+aws configure list
+aws sts get-caller-identity
+aws configure list-profiles
+aws iam list-users
+aws iam list-users --query "Users[].UserName"
+
+
+
+Create Network
+
+↓
+
+Configure Network
+
+↓
+
+Connect Networks
+
+↓
+
+Secure Network
+
+↓
+
+Launch Servers
