@@ -203,3 +203,34 @@ ExpressRoute
 VPN Gateway
 Hub VNet
 Route Tables
+
+
+az ad sp create-for-rbac -n az-demo --role="Contributer" --scopes="/subscriptions/subscription-id"
+copy appId, password, tenant
+
+They will be used to authenticate terraform account
+
+command to display service priciple   - -  az ad sp list --output table
+az ad sp list --display-name "terraform-sp"
+
+export ARM_CLIENT_ID = ""
+export ARM_CLIENT_SECRET = ""
+export ARM_SUBSCRIPTION_ID = ""
+EXPORT arm_TENANT_ID = ""
+
+
+
+#!/bin/bash
+
+RESOURCE_GROUP_NAME=tfstate-day04
+STORAGE_ACCOUNT_NAME=day04$RANDOM
+CONTAINER_NAME=tfstate
+
+# Create resource group
+az group create --name $RESOURCE_GROUP_NAME --location eastus
+
+# Create storage account
+az storage account create --resource-group $RESOURCE_GROUP_NAME --name $STORAGE_ACCOUNT_NAME --sku Standard_LRS --encryption-services blob
+
+# Create blob container
+az storage container create --name $CONTAINER_NAME --account-name $STORAGE_ACCOUNT_NAME
