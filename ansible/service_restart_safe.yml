@@ -1,0 +1,55 @@
+---
+# playbooks/service_restart_safe.yml
+#
+# Restart a service across a fleet, one host at a time, and only proceed
+# to the next host once a health check passes. This is the pattern for
+# "roll out a config change and bounce the service" without an outage.
+#
+# Usage:
+#   ansible-playbook playbooks/service_restart_safe.yml \
+#       -i inventory/hosts.ini -l web \
+#       -e "service_name=nginx health_check_port=80"
+
+- name: Rolling-restart a service with a health check gate
+  hosts: all
+  become: true
+  serial: 1               # one host at a time — the safe default for prod
+  vars:
+    service_name: nginx
+    health_check_port: 80
+    health_check_path: /healthz
+    health_check_retries: 10
+    health_check_delay: 3
+
+  tasks:
+    - name: Ensure service is enabled
+      systemd:
+        name: "{{ service_name }}"
+        enabled: true
+
+    - name: Restart service
+      systemd:
+        name: "{{ service_name }}"
+        state: restarted
+      register: restart_result
+
+    - name: Wait for the port to accept connections
+      wait_for:
+        port: "{{ health_check_port }}"
+        host: "{{ ansible_default_ipv4.address | default('127.0.0.1') }}"
+        timeout: 30
+        delay: 2
+
+    - name: Hit health endpoint
+      uri:
+        url: "http://localhost:{{ health_check_port }}{{ health_check_path }}"
+        status_code: 200
+        timeout: 5
+      register: health
+      retries: "{{ health_check_retries }}"
+      delay: "{{ health_check_delay }}"
+      until: health.status == 200
+
+    - name: Confirm success
+      debug:
+        msg: "{{ inventory_hostname }}: {{ service_name }} healthy after restart"

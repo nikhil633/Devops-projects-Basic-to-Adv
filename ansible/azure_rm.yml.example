@@ -1,0 +1,31 @@
+# inventory/azure_rm.yml.example
+#
+# Dynamic inventory sourced live from Azure, instead of hand-maintaining
+# hosts.ini. Rename to azure_rm.yml to activate, and point --inventory at it.
+#
+# Requires: pip install ansible[azure] --break-system-packages
+#           az login   (or set AZURE_CLIENT_ID / AZURE_SECRET / AZURE_TENANT / AZURE_SUBSCRIPTION_ID)
+
+plugin: azure_rm
+
+include_vm_resource_groups:
+  - my-resource-group
+
+auth_source: auto
+
+keyed_groups:
+  - prefix: tag
+    key: tags
+  - prefix: location
+    key: location
+  - prefix: os
+    key: os_disk.operating_system_type
+
+conditional_groups:
+  webserver: "'web' in (tags.role | default(''))"
+  database: "'db' in (tags.role | default(''))"
+
+hostvar_expressions:
+  ansible_host: private_ipv4_addresses[0]
+
+# Verify with: ansible-inventory -i inventory/azure_rm.yml --graph

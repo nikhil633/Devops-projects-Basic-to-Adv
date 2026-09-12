@@ -1,98 +1,54 @@
-sudo apt update
-sudo apt install python3 -y
-sudo apt install python3-pip -y
-sudo apt install ansible -y
-pip install boto3
-ansible-galaxy collection install amazon.aws
+# Ansible Daily-Ops Playbook Pack
 
+Five playbooks covering the checks and rollouts that come up most often
+managing a fleet — the Ansible counterpart to the Python/GitHub script pack.
 
-or using pip
-python3 -m pip install --user ansible
+| Playbook | Purpose |
+|---|---|
+| `patch_and_reboot.yml` | Update packages fleet-wide, reboot only if the kernel actually changed, rolled out in batches |
+| `service_restart_safe.yml` | Rolling restart of a service, one host at a time, gated on a health check |
+| `disk_cleanup_report.yml` | Report disk usage, trim journal/old rotated logs past a retention window, flag hosts still over threshold |
+| `ssh_access_rollout.yml` | Grant or revoke a user's SSH access + sudo across the fleet (onboarding/offboarding) |
+| `fleet_health_report.yml` | Morning sweep: uptime, load, disk, and critical service status per host, with an aggregated "needs attention" list |
 
-How to set Up passwordless authentication
+## Setup
 
-For SSH ----->
-ssh-copy-id -f "-o IdentityFile <PATH TO PEM FILE>" ubuntu@<INSTANCE-PUBLIC-IP>
-                       ||
-                       VV
-ssh-copy-id -f "-o IdentityFile ~?Downloads/Devops-basic-to-adv/ansible/vpc-peering-demo-east-demo.pem " username@ipaddress
-After that you can do ssh username@ipaddress
+```bash
+pip install ansible --break-system-packages
+```
 
-For PASSWORD ----->
+Edit `inventory/hosts.ini` with your real hosts, or rename
+`inventory/azure_rm.yml.example` → `azure_rm.yml` to pull inventory
+live from Azure instead of hand-maintaining a static file (needs
+`pip install ansible[azure]` and `az login`).
 
-login to ec2 ----> goto sudo vim /etc/ssh/sshd_config.d/60-cloudimg-settings.conf
-change passwordauthentication to yes
+`ansible.cfg` already points at `./inventory/hosts.ini` and assumes
+`sudo` privilege escalation — adjust `remote_user` to match your VMs.
 
-once check sudo vim /etc/ssh/sshd_config You can update here also passwordauthentication on yes
+## Running
 
-sudo systemctl restart ssh
+```bash
+# dry run first, always
+ansible-playbook playbooks/patch_and_reboot.yml --check
 
-set password
+# real run, limited to one group
+ansible-playbook playbooks/patch_and_reboot.yml -l web
 
-sudo passwd username
+# pass variables ad hoc
+ansible-playbook playbooks/service_restart_safe.yml \
+    -e "service_name=nginx health_check_port=80"
 
-ssh-copy-id username@ipaddress -> you can login with password for first time
+ansible-playbook playbooks/ssh_access_rollout.yml \
+    -e "target_user=nikhil ssh_pubkey_file=~/.ssh/id_ed25519.pub state=present"
+```
 
-For second time you can ssh username@ipaddress
+## Notes
 
-
-Ansible inventory -> just a file let the master know how many workers it is having
-
-vim inventory.ini
-  -> add username@ipaddress
-
-another option ->you can create in location at /etc/ansible/hosts -> hosts will act as default inventory file
-
-ansible -i inventory.ini -m ping all
-ansible -i invertory.ini -m shell -a "apt install openjdk" "all"
-
-
-scp C:\Users\reddy\Downloads\DEVOPS-BASIC-TO-ADV\ansible\aws.pem azureuser@20.244.1.95:/home/azureuser/
-
-ansible-galaxy -h
-ansible-galaxy role -h
-ansible-galaxy role install bsbending.docker
-ls ~/.ansible/roles
-vim docker-playbook.yaml
-
----
-- hosts: all
-  become: true
-  roles:
-    - bsmending.docker
-
-run -> ansible-playbook -i inventory.ini docker-playbook.yaml
-
-u can push code to github and publish to ansible
-
-ansible-galaxy import github_username github_repo_name --token 
-
-ansible-galaxy role init test
-
-Ansible vault
-
-ansible-vault
-
-
-openssl rand -base64 2048 > vault.pass
-ansible-vault create group-vars/all/pass.yml --vault-password-file vault.pass
-ansible-vault encrypt group-vars/all/pass.yml --vault-password-file vault.pass
-ansible-vault decrypt group-vars/all/pass.yml --vault-password-file vault.pass
-ansible-vault view group-vars/all/pass.yml --vault-password-file vault.pass
-
-    create              Create new vault encrypted file
-    decrypt             Decrypt vault encrypted file
-    edit                Edit vault encrypted file
-    view                View vault encrypted file
-    encrypt             Encrypt YAML file
-    encrypt_string      Encrypt a string
-    rekey               Re-key a vault encrypted file
-
-
-
-
-ansible-playbook playbook.yaml --vault-password-file vault.pass
-ansible-playbook -i inventory.ini stop.yaml --vault-password-file vault.pass
-
-Spacelift -> Stack , Spaces, Context, Cloud Integration Policy
-
+- `serial:` is used in the patching and service-restart playbooks so you
+  never take out a whole tier at once — adjust the batch size/percentage
+  for your fleet size.
+- `fleet_health_report.yml` mirrors the intent of `k8s_pod_health_check.py`
+  from the Python pack, just for VM/bare-metal fleets instead of pods —
+  useful if you're running a mixed AKS + VM environment.
+- All playbooks are idempotent — safe to schedule via cron or a pipeline
+  and re-run without side effects on hosts that are already compliant.

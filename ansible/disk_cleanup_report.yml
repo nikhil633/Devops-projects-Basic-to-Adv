@@ -1,0 +1,74 @@
+---
+# playbooks/disk_cleanup_report.yml
+#
+# The "prod disk is filling up" fire drill, made routine: report disk
+# usage, clean old logs/journal entries past a retention window, and
+# flag hosts still over a threshold after cleanup.
+#
+# Usage:
+#   ansible-playbook playbooks/disk_cleanup_report.yml -i inventory/hosts.ini
+#   ansible-playbook playbooks/disk_cleanup_report.yml -e "log_retention_days=14 warn_threshold=80"
+
+- name: Disk usage report and log cleanup
+  hosts: all
+  become: true
+  vars:
+    log_retention_days: 30
+    warn_threshold: 85       # percent used, triggers a warning
+    log_paths:
+      - /var/log
+      - /var/log/nginx
+      - /var/log/containers
+
+  tasks:
+    - name: Gather disk facts
+      setup:
+        filter: ansible_mounts
+
+    - name: Report current disk usage for /
+      debug:
+        msg: >-
+          {{ inventory_hostname }}: / is
+          {{ (100 * (item.size_total - item.size_available) / item.size_total) | round(1) }}% full
+      loop: "{{ ansible_mounts }}"
+      when: item.mount == "/"
+      loop_control:
+        label: "{{ item.mount }}"
+
+    - name: Trim the journal to the retention window
+      command: "journalctl --vacuum-time={{ log_retention_days }}d"
+      changed_when: true
+
+    - name: Find rotated/compressed logs older than retention window
+      find:
+        paths: "{{ log_paths }}"
+        patterns: "*.gz,*.log.*,*.[0-9]"
+        age: "{{ log_retention_days }}d"
+        recurse: true
+      register: old_logs
+      failed_when: false
+
+    - name: Delete old rotated logs
+      file:
+        path: "{{ item.path }}"
+        state: absent
+      loop: "{{ old_logs.files | default([]) }}"
+      loop_control:
+        label: "{{ item.path }}"
+
+    - name: Re-check disk usage after cleanup
+      setup:
+        filter: ansible_mounts
+
+    - name: Flag hosts still over threshold
+      debug:
+        msg: >-
+          WARNING: {{ inventory_hostname }} still at
+          {{ (100 * (item.size_total - item.size_available) / item.size_total) | round(1) }}%
+          after cleanup — needs manual attention.
+      loop: "{{ ansible_mounts }}"
+      when:
+        - item.mount == "/"
+        - (100 * (item.size_total - item.size_available) / item.size_total) > warn_threshold
+      loop_control:
+        label: "{{ item.mount }}"

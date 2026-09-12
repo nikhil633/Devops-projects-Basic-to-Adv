@@ -1,0 +1,84 @@
+---
+# playbooks/fleet_health_report.yml
+#
+# The Ansible counterpart to k8s_pod_health_check.py: a quick "is
+# anything on fire" sweep across VMs/bare-metal hosts — uptime, load,
+# disk, memory, and whether any listed critical services are down.
+# Good as a morning cron job piping output to Slack/email.
+#
+# Usage:
+#   ansible-playbook playbooks/fleet_health_report.yml -i inventory/hosts.ini
+#   ansible-playbook playbooks/fleet_health_report.yml -e '{"critical_services":["nginx","docker"]}'
+
+- name: Fleet health sweep
+  hosts: all
+  gather_facts: true
+  vars:
+    critical_services:
+      - sshd
+    load_warn_per_core: 1.5
+
+  tasks:
+    - name: Check critical services are running
+      systemd:
+        name: "{{ item }}"
+      register: svc_status
+      loop: "{{ critical_services }}"
+      failed_when: false
+      changed_when: false
+
+    - name: Get disk usage for /
+      shell: "df --output=pcent / | tail -1 | tr -d '% '"
+      register: disk_pct
+      changed_when: false
+
+    - name: Get 1-minute load average
+      shell: "cut -d' ' -f1 /proc/loadavg"
+      register: load_avg
+      changed_when: false
+
+    - name: Build per-host health summary
+      set_fact:
+        health_summary:
+          host: "{{ inventory_hostname }}"
+          uptime_days: "{{ (ansible_uptime_seconds / 86400) | round(1) }}"
+          disk_used_pct: "{{ disk_pct.stdout }}"
+          load_1min: "{{ load_avg.stdout }}"
+          load_warn: "{{ (load_avg.stdout | float) > (ansible_processor_vcpus | default(1) * load_warn_per_core) }}"
+          disk_warn: "{{ (disk_pct.stdout | int) > 85 }}"
+          down_services: >-
+            {{
+              svc_status.results
+              | selectattr('status.ActiveState', 'defined')
+              | rejectattr('status.ActiveState', 'equalto', 'active')
+              | map(attribute='item')
+              | list
+            }}
+
+    - name: Print summary line
+      debug:
+        msg: >-
+          {{ health_summary.host }} |
+          uptime={{ health_summary.uptime_days }}d |
+          disk={{ health_summary.disk_used_pct }}%{{ ' (WARN)' if health_summary.disk_warn else '' }} |
+          load={{ health_summary.load_1min }}{{ ' (WARN)' if health_summary.load_warn else '' }} |
+          down_services={{ health_summary.down_services }}
+
+- name: Aggregate flagged hosts on the control node
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: List hosts needing attention
+      debug:
+        msg: >-
+          {{ hostvars[item].health_summary.host }} needs attention:
+          disk_warn={{ hostvars[item].health_summary.disk_warn }}
+          load_warn={{ hostvars[item].health_summary.load_warn }}
+          down_services={{ hostvars[item].health_summary.down_services }}
+      loop: "{{ groups['all'] }}"
+      when: >-
+        hostvars[item].health_summary is defined and
+        (hostvars[item].health_summary.disk_warn
+         or hostvars[item].health_summary.load_warn
+         or hostvars[item].health_summary.down_services | length > 0)

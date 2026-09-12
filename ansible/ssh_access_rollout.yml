@@ -1,0 +1,72 @@
+---
+# playbooks/ssh_access_rollout.yml
+#
+# Add or revoke a user's SSH access across the fleet — the everyday
+# onboarding/offboarding task. Idempotent: safe to re-run.
+#
+# Usage (grant access):
+#   ansible-playbook playbooks/ssh_access_rollout.yml \
+#       -e "target_user=nikhil ssh_pubkey_file=~/.ssh/nikhil_id_ed25519.pub state=present"
+#
+# Usage (revoke access, e.g. offboarding):
+#   ansible-playbook playbooks/ssh_access_rollout.yml \
+#       -e "target_user=nikhil state=absent"
+
+- name: Manage a user's SSH access across the fleet
+  hosts: all
+  become: true
+  vars:
+    state: present            # present = grant/update, absent = revoke
+    target_user: ""
+    ssh_pubkey_file: ""
+    sudo_access: false
+
+  tasks:
+    - name: Fail fast if target_user not provided
+      assert:
+        that: target_user | length > 0
+        fail_msg: "Pass -e target_user=<name>"
+
+    - name: Ensure user exists (when granting access)
+      user:
+        name: "{{ target_user }}"
+        shell: /bin/bash
+        create_home: true
+        state: present
+      when: state == "present"
+
+    - name: Install SSH public key
+      authorized_key:
+        user: "{{ target_user }}"
+        state: present
+        key: "{{ lookup('file', ssh_pubkey_file) }}"
+      when: state == "present" and ssh_pubkey_file | length > 0
+
+    - name: Grant passwordless sudo (only if requested)
+      copy:
+        dest: "/etc/sudoers.d/{{ target_user }}"
+        content: "{{ target_user }} ALL=(ALL) NOPASSWD:ALL\n"
+        mode: "0440"
+        validate: "visudo -cf %s"
+      when: state == "present" and sudo_access | bool
+
+    - name: Revoke sudo file (on offboarding)
+      file:
+        path: "/etc/sudoers.d/{{ target_user }}"
+        state: absent
+      when: state == "absent"
+
+    - name: Lock account (offboarding — keeps home dir/audit trail intact)
+      user:
+        name: "{{ target_user }}"
+        password_lock: true
+        shell: /usr/sbin/nologin
+      when: state == "absent"
+      failed_when: false   # don't fail the whole run if user never existed on this host
+
+    - name: Remove all authorized_keys for the user (offboarding)
+      file:
+        path: "/home/{{ target_user }}/.ssh/authorized_keys"
+        state: absent
+      when: state == "absent"
+      failed_when: false

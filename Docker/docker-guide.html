@@ -1,0 +1,793 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Docker — Field Manual</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#0F1720;
+  --bg-panel:#151F29;
+  --bg-panel-2:#1B2733;
+  --ink:#E8EDF2;
+  --muted:#8FA1B3;
+  --muted-2:#5E7286;
+  --border:#26333F;
+  --accent:#FF7A45;      /* cargo orange */
+  --accent-dim:#B95A31;
+  --steel:#4FA3D1;       /* steel blue */
+  --teal:#2FBF8F;        /* ok/tip green */
+  --warn:#E8B339;
+  --font-display:'Space Grotesk',sans-serif;
+  --font-body:'IBM Plex Sans',sans-serif;
+  --font-mono:'JetBrains Mono',monospace;
+}
+*{box-sizing:border-box; margin:0; padding:0;}
+html{scroll-behavior:smooth;}
+body{
+  background:var(--bg);
+  color:var(--ink);
+  font-family:var(--font-body);
+  line-height:1.6;
+  font-size:15px;
+}
+::selection{background:var(--accent); color:#0F1720;}
+
+/* ===== Layout ===== */
+.shell{display:flex; min-height:100vh;}
+.sidebar{
+  width:270px; flex-shrink:0;
+  background:var(--bg-panel);
+  border-right:1px solid var(--border);
+  position:sticky; top:0; height:100vh; overflow-y:auto;
+  padding:26px 18px 40px;
+}
+.sidebar::-webkit-scrollbar{width:6px;}
+.sidebar::-webkit-scrollbar-thumb{background:var(--border); border-radius:3px;}
+.brand{
+  display:flex; align-items:center; gap:10px; margin-bottom:6px; padding:0 6px;
+}
+.brand-mark{width:26px; height:26px; flex-shrink:0;}
+.brand-text{font-family:var(--font-display); font-weight:700; font-size:17px; letter-spacing:0.2px;}
+.brand-sub{font-size:11px; color:var(--muted-2); padding:0 6px 22px; letter-spacing:0.4px; text-transform:uppercase;}
+.navgroup{margin-bottom:4px;}
+.navgroup-title{
+  font-size:10.5px; text-transform:uppercase; letter-spacing:0.8px; color:var(--muted-2);
+  padding:14px 8px 6px; font-weight:600;
+}
+.navlink{
+  display:flex; align-items:center; gap:9px;
+  padding:7px 8px; border-radius:6px; color:var(--muted);
+  text-decoration:none; font-size:13.5px; cursor:pointer;
+  border-left:2px solid transparent;
+}
+.navlink:hover{color:var(--ink); background:var(--bg-panel-2);}
+.navlink.active{color:var(--ink); background:var(--bg-panel-2); border-left:2px solid var(--accent);}
+.navlink .num{font-family:var(--font-mono); font-size:11px; color:var(--muted-2); width:16px;}
+
+.main{flex:1; min-width:0; padding:0;}
+.container{max-width:920px; margin:0 auto; padding:0 48px 100px;}
+
+/* ===== Hero ===== */
+.hero{
+  padding:64px 48px 40px; max-width:1020px; margin:0 auto;
+  display:flex; align-items:center; gap:44px; flex-wrap:wrap;
+}
+.hero-text{flex:1; min-width:320px;}
+.eyebrow{
+  font-family:var(--font-mono); font-size:12px; color:var(--accent);
+  letter-spacing:1.5px; text-transform:uppercase; margin-bottom:14px; display:block;
+}
+.hero h1{
+  font-family:var(--font-display); font-size:52px; font-weight:700; line-height:1.05;
+  margin-bottom:16px; letter-spacing:-0.5px;
+}
+.hero h1 span{color:var(--accent);}
+.hero p{color:var(--muted); font-size:16px; max-width:480px;}
+.hero-stack{width:280px; flex-shrink:0;}
+
+/* stacked container layers visual */
+.layers{display:flex; flex-direction:column-reverse; gap:8px;}
+.layer{
+  height:38px; border-radius:6px; display:flex; align-items:center; padding:0 14px;
+  font-family:var(--font-mono); font-size:11.5px; color:#0F1720; font-weight:600;
+  box-shadow:0 3px 0 rgba(0,0,0,0.25), inset 0 0 0 1px rgba(255,255,255,0.15);
+  animation:rise 0.6s ease backwards;
+}
+.layer:nth-child(1){animation-delay:0.05s;}
+.layer:nth-child(2){animation-delay:0.15s;}
+.layer:nth-child(3){animation-delay:0.25s;}
+.layer:nth-child(4){animation-delay:0.35s;}
+.layer:nth-child(5){animation-delay:0.45s;}
+@keyframes rise{from{opacity:0; transform:translateY(10px);} to{opacity:1; transform:translateY(0);}}
+.l1{background:var(--steel);}
+.l2{background:#7FBF6E;}
+.l3{background:var(--warn);}
+.l4{background:var(--accent);}
+.l5{background:#D9DEE3; box-shadow:0 3px 0 rgba(0,0,0,0.25), inset 0 0 0 1px rgba(255,255,255,0.4);}
+
+/* ===== Sections ===== */
+section{padding-top:52px; scroll-margin-top:20px;}
+section:first-of-type{padding-top:8px;}
+h2{
+  font-family:var(--font-display); font-size:26px; font-weight:600;
+  margin-bottom:6px; display:flex; align-items:baseline; gap:10px;
+}
+h2 .idx{font-family:var(--font-mono); color:var(--accent); font-size:16px;}
+.section-intro{color:var(--muted); margin-bottom:26px; max-width:640px; font-size:14.5px;}
+h3{
+  font-family:var(--font-display); font-size:16.5px; font-weight:600;
+  margin:28px 0 10px; color:var(--ink);
+}
+h3.with-rule{border-top:1px solid var(--border); padding-top:24px;}
+p{margin-bottom:12px; color:#C9D3DC;}
+p code, li code{
+  font-family:var(--font-mono); background:var(--bg-panel-2); color:var(--accent);
+  padding:1px 6px; border-radius:4px; font-size:12.5px; border:1px solid var(--border);
+}
+ul, ol{margin:10px 0 16px 22px; color:#C9D3DC;}
+li{margin-bottom:6px;}
+strong{color:var(--ink); font-weight:600;}
+
+/* ===== Command table ===== */
+.cmdtable{width:100%; border-collapse:collapse; margin:14px 0 8px; font-size:13.5px;}
+.cmdtable th{
+  text-align:left; font-family:var(--font-mono); font-size:10.5px; text-transform:uppercase;
+  letter-spacing:0.6px; color:var(--muted-2); padding:8px 12px; border-bottom:1px solid var(--border);
+}
+.cmdtable td{padding:9px 12px; border-bottom:1px solid var(--border); vertical-align:top; color:#C9D3DC;}
+.cmdtable tr:hover td{background:var(--bg-panel);}
+.cmdtable code{
+  font-family:var(--font-mono); color:var(--accent); font-size:12.5px; white-space:nowrap;
+}
+.cmdtable .desc{color:var(--muted); font-size:13px;}
+
+/* ===== Code blocks ===== */
+.code-wrap{position:relative; margin:14px 0 20px;}
+.code-label{
+  font-family:var(--font-mono); font-size:10.5px; color:var(--muted-2);
+  text-transform:uppercase; letter-spacing:0.6px; margin-bottom:6px; display:block;
+}
+pre{
+  background:#0B121A; border:1px solid var(--border); border-radius:8px;
+  padding:16px 18px; overflow-x:auto; font-family:var(--font-mono); font-size:12.8px;
+  line-height:1.65; color:#DCE4EB;
+}
+pre .c{color:var(--muted-2); font-style:italic;} /* comment */
+pre .k{color:var(--steel);} /* keyword / instruction */
+pre .s{color:var(--teal);} /* string/value */
+pre .f{color:var(--accent);} /* flag */
+.copy-btn{
+  position:absolute; top:8px; right:8px; background:var(--bg-panel-2); border:1px solid var(--border);
+  color:var(--muted); font-family:var(--font-mono); font-size:10.5px; padding:5px 9px;
+  border-radius:5px; cursor:pointer; transition:all .15s;
+}
+.copy-btn:hover{color:var(--ink); border-color:var(--accent);}
+.copy-btn.copied{color:var(--teal); border-color:var(--teal);}
+
+/* ===== Callouts ===== */
+.callout{
+  border-radius:8px; padding:14px 16px; margin:16px 0; font-size:13.5px;
+  border-left:3px solid; display:flex; gap:10px;
+}
+.callout .icon{font-family:var(--font-mono); font-weight:700; flex-shrink:0;}
+.callout.tip{background:rgba(47,191,143,0.08); border-color:var(--teal);}
+.callout.tip .icon{color:var(--teal);}
+.callout.warn{background:rgba(232,179,57,0.08); border-color:var(--warn);}
+.callout.warn .icon{color:var(--warn);}
+.callout p{margin:0; color:#C9D3DC;}
+
+/* ===== Stage tabs (multi-stage examples) ===== */
+.tabs{display:flex; gap:6px; border-bottom:1px solid var(--border); margin-bottom:0; flex-wrap:wrap;}
+.tab-btn{
+  font-family:var(--font-mono); font-size:12.5px; color:var(--muted); background:none; border:none;
+  padding:9px 14px; cursor:pointer; border-bottom:2px solid transparent; margin-bottom:-1px;
+}
+.tab-btn:hover{color:var(--ink);}
+.tab-btn.active{color:var(--accent); border-bottom-color:var(--accent);}
+.tab-panel{display:none;}
+.tab-panel.active{display:block;}
+
+/* stage flow diagram */
+.stageflow{display:flex; align-items:center; gap:0; margin:18px 0 22px; flex-wrap:wrap;}
+.stage-box{
+  background:var(--bg-panel-2); border:1px solid var(--border); border-radius:8px;
+  padding:12px 16px; min-width:130px;
+}
+.stage-box .name{font-family:var(--font-mono); font-size:12px; color:var(--accent); margin-bottom:4px;}
+.stage-box .role{font-size:11.5px; color:var(--muted);}
+.stage-arrow{color:var(--muted-2); font-size:18px; padding:0 12px;}
+
+/* checklist */
+.checklist{list-style:none; margin:14px 0; display:grid; gap:8px;}
+.checklist li{
+  display:flex; gap:10px; align-items:flex-start; color:#C9D3DC; font-size:13.8px;
+  background:var(--bg-panel); border:1px solid var(--border); border-radius:7px; padding:10px 13px;
+}
+.checklist li::before{content:"✓"; color:var(--teal); font-weight:700; flex-shrink:0;}
+
+/* footer */
+.footnote{
+  margin-top:64px; padding-top:22px; border-top:1px solid var(--border);
+  color:var(--muted-2); font-size:12.5px; font-family:var(--font-mono);
+}
+
+@media(max-width:880px){
+  .sidebar{position:fixed; left:-280px; z-index:20; transition:left .2s; box-shadow:20px 0 40px rgba(0,0,0,0.4);}
+  .sidebar.open{left:0;}
+  .menu-toggle{
+    display:flex; position:fixed; top:16px; left:16px; z-index:30; background:var(--bg-panel-2);
+    border:1px solid var(--border); color:var(--ink); width:38px; height:38px; border-radius:8px;
+    align-items:center; justify-content:center; cursor:pointer; font-size:16px;
+  }
+  .container, .hero{padding-left:24px; padding-right:24px;}
+  .hero{padding-top:64px;}
+  .hero h1{font-size:36px;}
+}
+@media(min-width:881px){.menu-toggle{display:none;}}
+</style>
+</head>
+<body>
+
+<button class="menu-toggle" onclick="document.querySelector('.sidebar').classList.toggle('open')">☰</button>
+
+<div class="shell">
+  <nav class="sidebar">
+    <div class="brand">
+      <svg class="brand-mark" viewBox="0 0 24 24" fill="none">
+        <rect x="2" y="14" width="5" height="5" rx="1" fill="#4FA3D1"/>
+        <rect x="8" y="14" width="5" height="5" rx="1" fill="#7FBF6E"/>
+        <rect x="14" y="14" width="5" height="5" rx="1" fill="#FF7A45"/>
+        <rect x="8" y="8" width="5" height="5" rx="1" fill="#E8B339"/>
+        <path d="M1 17c0 3 4 5 10 5s10-2 10-5" stroke="#8FA1B3" stroke-width="1.2" fill="none"/>
+      </svg>
+      <span class="brand-text">Docker</span>
+    </div>
+    <div class="brand-sub">Field manual</div>
+
+    <div class="navgroup">
+      <div class="navgroup-title">Foundations</div>
+      <a class="navlink" data-target="concepts"><span class="num">01</span> Core concepts</a>
+      <a class="navlink" data-target="lifecycle"><span class="num">02</span> Image → container lifecycle</a>
+    </div>
+    <div class="navgroup">
+      <div class="navgroup-title">Command reference</div>
+      <a class="navlink" data-target="cmd-images"><span class="num">03</span> Image commands</a>
+      <a class="navlink" data-target="cmd-containers"><span class="num">04</span> Container commands</a>
+      <a class="navlink" data-target="cmd-exec"><span class="num">05</span> Exec, logs & debugging</a>
+      <a class="navlink" data-target="cmd-volumes"><span class="num">06</span> Volumes & networks</a>
+      <a class="navlink" data-target="cmd-system"><span class="num">07</span> System & cleanup</a>
+      <a class="navlink" data-target="cmd-compose"><span class="num">08</span> Docker Compose</a>
+    </div>
+    <div class="navgroup">
+      <div class="navgroup-title">Dockerfile</div>
+      <a class="navlink" data-target="instructions"><span class="num">09</span> Instruction reference</a>
+      <a class="navlink" data-target="multistage-concept"><span class="num">10</span> Multi-stage builds</a>
+      <a class="navlink" data-target="examples"><span class="num">11</span> Production Dockerfiles</a>
+      <a class="navlink" data-target="dockerignore"><span class="num">12</span> .dockerignore</a>
+    </div>
+    <div class="navgroup">
+      <div class="navgroup-title">Production</div>
+      <a class="navlink" data-target="checklist"><span class="num">13</span> Hardening checklist</a>
+      <a class="navlink" data-target="buildx"><span class="num">14</span> Buildx, cache & multi-arch</a>
+    </div>
+  </nav>
+
+  <main class="main">
+    <div class="hero">
+      <div class="hero-text">
+        <span class="eyebrow">Containers · Images · Layers</span>
+        <h1>Docker,<br>end to <span>end</span>.</h1>
+        <p>Every command you'll actually reach for, plus multi-stage Dockerfiles built the way they'd need to look to survive a production rollout on AKS or EKS — small, non-root, cache-aware.</p>
+      </div>
+      <div class="hero-stack">
+        <div class="layers">
+          <div class="layer l5">FROM scratch</div>
+          <div class="layer l1">runtime deps</div>
+          <div class="layer l2">app layer</div>
+          <div class="layer l3">config / env</div>
+          <div class="layer l4">CMD entrypoint</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="container">
+
+      <!-- 01 CONCEPTS -->
+      <section id="concepts">
+        <h2><span class="idx">01</span> Core concepts</h2>
+        <p class="section-intro">Five nouns cover almost everything in Docker's model. Get these solid and every command below is just a verb applied to one of them.</p>
+
+        <h3>Image</h3>
+        <p>A read-only template built from a <code>Dockerfile</code> — a stack of filesystem <strong>layers</strong> plus metadata (entrypoint, env, exposed ports). Images are immutable and content-addressed; every layer is cached and shared across images that share it.</p>
+
+        <h3>Container</h3>
+        <p>A running (or stopped) instance of an image: the image's layers plus one thin writable layer on top. Ephemeral by design — anything written to that top layer disappears when the container is removed unless it's in a volume or bind mount.</p>
+
+        <h3>Layer</h3>
+        <p>Each <code>RUN</code>, <code>COPY</code>, and <code>ADD</code> instruction produces a new layer. Layers are cached by content hash — reorder your Dockerfile so things that change rarely (dependency manifests) come before things that change often (source code) and you get real build-time savings.</p>
+
+        <h3>Registry</h3>
+        <p>Where images live: Docker Hub, GHCR, ACR, ECR, GCR. <code>docker push</code>/<code>pull</code> talk to a registry; tags (<code>myapp:1.4.2</code>) and digests (<code>myapp@sha256:...</code>) are how you address a specific image inside one.</p>
+
+        <h3>Volume / Network</h3>
+        <p>A <strong>volume</strong> is Docker-managed persistent storage that outlives any single container. A <strong>network</strong> is a virtual switch that lets containers find each other by name — every user-defined bridge network gets embedded DNS for free.</p>
+      </section>
+
+      <!-- 02 LIFECYCLE -->
+      <section id="lifecycle">
+        <h2><span class="idx">02</span> Image → container lifecycle</h2>
+        <p class="section-intro">The path from source code to a running process, and the command that drives each hop.</p>
+        <div class="stageflow">
+          <div class="stage-box"><div class="name">Dockerfile</div><div class="role">build instructions</div></div>
+          <div class="stage-arrow">→</div>
+          <div class="stage-box"><div class="name">docker build</div><div class="role">produces an image</div></div>
+          <div class="stage-arrow">→</div>
+          <div class="stage-box"><div class="name">docker push</div><div class="role">to a registry</div></div>
+          <div class="stage-arrow">→</div>
+          <div class="stage-box"><div class="name">docker run</div><div class="role">→ container</div></div>
+        </div>
+        <p>In Kubernetes this same image is what a <code>Pod</code>'s <code>spec.containers[].image</code> points at — everything you validate locally with <code>docker run</code> is the same artifact the kubelet will pull and start on a node.</p>
+      </section>
+
+      <!-- 03 IMAGE COMMANDS -->
+      <section id="cmd-images">
+        <h2><span class="idx">03</span> Image commands</h2>
+        <table class="cmdtable">
+          <tr><th>Command</th><th>What it does</th></tr>
+          <tr><td><code>docker build -t app:1.0 .</code></td><td class="desc">Build an image from the Dockerfile in the current context, tagging it <code>app:1.0</code></td></tr>
+          <tr><td><code>docker build -f Dockerfile.prod --target runtime -t app:1.0 .</code></td><td class="desc">Build from a named file, stopping at a specific multi-stage target</td></tr>
+          <tr><td><code>docker build --build-arg NODE_ENV=production .</code></td><td class="desc">Pass a build-time variable into <code>ARG</code></td></tr>
+          <tr><td><code>docker images</code></td><td class="desc">List local images</td></tr>
+          <tr><td><code>docker image ls -a --digests</code></td><td class="desc">List all images including intermediate ones, with content digests</td></tr>
+          <tr><td><code>docker pull nginx:1.27-alpine</code></td><td class="desc">Fetch an image (and specific tag) from a registry</td></tr>
+          <tr><td><code>docker push myrepo/app:1.0</code></td><td class="desc">Publish an image to a registry — requires a prior <code>docker login</code></td></tr>
+          <tr><td><code>docker tag app:1.0 myrepo/app:1.0</code></td><td class="desc">Create an additional tag pointing at the same image</td></tr>
+          <tr><td><code>docker rmi app:1.0</code></td><td class="desc">Remove an image (fails if a container still references it)</td></tr>
+          <tr><td><code>docker history app:1.0</code></td><td class="desc">Show each layer, its size, and the instruction that created it</td></tr>
+          <tr><td><code>docker inspect app:1.0</code></td><td class="desc">Full JSON metadata — env, entrypoint, exposed ports, layer digests</td></tr>
+          <tr><td><code>docker save app:1.0 -o app.tar</code></td><td class="desc">Export an image to a tarball (air-gapped transfer)</td></tr>
+          <tr><td><code>docker load -i app.tar</code></td><td class="desc">Import an image tarball back into the local store</td></tr>
+        </table>
+        <div class="callout tip"><span class="icon">TIP</span><p>Always build with an explicit <code>-t name:tag</code>. An untagged build still works but leaves you hunting for a <code>&lt;none&gt;</code> image ID in <code>docker images</code>.</p></div>
+      </section>
+
+      <!-- 04 CONTAINER COMMANDS -->
+      <section id="cmd-containers">
+        <h2><span class="idx">04</span> Container commands</h2>
+        <table class="cmdtable">
+          <tr><th>Command</th><th>What it does</th></tr>
+          <tr><td><code>docker run -d -p 8080:80 --name web nginx</code></td><td class="desc">Start a detached container, mapping host:container ports, with a friendly name</td></tr>
+          <tr><td><code>docker run --rm -it ubuntu bash</code></td><td class="desc">Interactive shell, auto-removed on exit — the go-to for a quick sanity check</td></tr>
+          <tr><td><code>docker run -e KEY=value --env-file .env app</code></td><td class="desc">Inject environment variables, individually or from a file</td></tr>
+          <tr><td><code>docker run -v pgdata:/var/lib/postgresql/data postgres</code></td><td class="desc">Mount a named volume for persistent state</td></tr>
+          <tr><td><code>docker run --memory=512m --cpus=1.5 app</code></td><td class="desc">Cap resource usage — mirrors what you'd set as k8s requests/limits</td></tr>
+          <tr><td><code>docker run --restart unless-stopped app</code></td><td class="desc">Restart policy for standalone (non-orchestrated) hosts</td></tr>
+          <tr><td><code>docker ps</code></td><td class="desc">List running containers</td></tr>
+          <tr><td><code>docker ps -a</code></td><td class="desc">List all containers, including stopped ones</td></tr>
+          <tr><td><code>docker stop web</code></td><td class="desc">Graceful stop — sends <code>SIGTERM</code>, then <code>SIGKILL</code> after a timeout</td></tr>
+          <tr><td><code>docker start web</code></td><td class="desc">Start an existing stopped container</td></tr>
+          <tr><td><code>docker restart web</code></td><td class="desc">Stop then start in one call</td></tr>
+          <tr><td><code>docker kill web</code></td><td class="desc">Immediate <code>SIGKILL</code>, no grace period</td></tr>
+          <tr><td><code>docker rm web</code></td><td class="desc">Remove a stopped container</td></tr>
+          <tr><td><code>docker rm -f web</code></td><td class="desc">Force-stop and remove in one shot</td></tr>
+        </table>
+      </section>
+
+      <!-- 05 EXEC / LOGS / DEBUG -->
+      <section id="cmd-exec">
+        <h2><span class="idx">05</span> Exec, logs & debugging</h2>
+        <table class="cmdtable">
+          <tr><th>Command</th><th>What it does</th></tr>
+          <tr><td><code>docker exec -it web sh</code></td><td class="desc">Shell into a running container (use <code>sh</code> on minimal/alpine images without bash)</td></tr>
+          <tr><td><code>docker exec web env</code></td><td class="desc">Run a one-off command without an interactive session</td></tr>
+          <tr><td><code>docker logs -f web</code></td><td class="desc">Stream logs live</td></tr>
+          <tr><td><code>docker logs --since 10m --tail 200 web</code></td><td class="desc">Recent log window — the same instinct as <code>kubectl logs --since</code></td></tr>
+          <tr><td><code>docker top web</code></td><td class="desc">Processes running inside the container, from the host's view</td></tr>
+          <tr><td><code>docker stats</code></td><td class="desc">Live CPU/memory/network usage for all running containers</td></tr>
+          <tr><td><code>docker inspect web</code></td><td class="desc">Full container config: mounts, networks, env, health status</td></tr>
+          <tr><td><code>docker cp web:/app/log.txt ./log.txt</code></td><td class="desc">Copy a file out of (or into) a container</td></tr>
+          <tr><td><code>docker diff web</code></td><td class="desc">Files changed relative to the image's filesystem</td></tr>
+          <tr><td><code>docker events</code></td><td class="desc">Live stream of daemon-level events (start, die, oom, health_status)</td></tr>
+        </table>
+      </section>
+
+      <!-- 06 VOLUMES / NETWORKS -->
+      <section id="cmd-volumes">
+        <h2><span class="idx">06</span> Volumes & networks</h2>
+        <table class="cmdtable">
+          <tr><th>Command</th><th>What it does</th></tr>
+          <tr><td><code>docker volume create pgdata</code></td><td class="desc">Create a named, Docker-managed volume</td></tr>
+          <tr><td><code>docker volume ls</code></td><td class="desc">List volumes</td></tr>
+          <tr><td><code>docker volume inspect pgdata</code></td><td class="desc">Show the volume's mountpoint on the host</td></tr>
+          <tr><td><code>docker volume rm pgdata</code></td><td class="desc">Delete a volume (must be unattached)</td></tr>
+          <tr><td><code>docker network create app-net</code></td><td class="desc">Create a user-defined bridge network with built-in DNS</td></tr>
+          <tr><td><code>docker network ls</code></td><td class="desc">List networks</td></tr>
+          <tr><td><code>docker network connect app-net web</code></td><td class="desc">Attach a running container to a network</td></tr>
+          <tr><td><code>docker network inspect app-net</code></td><td class="desc">Show connected containers and their IPs</td></tr>
+        </table>
+        <div class="callout tip"><span class="icon">TIP</span><p>Always create a user-defined network rather than relying on the default bridge — the default bridge has no built-in DNS, so containers can only reach each other by IP.</p></div>
+      </section>
+
+      <!-- 07 SYSTEM -->
+      <section id="cmd-system">
+        <h2><span class="idx">07</span> System & cleanup</h2>
+        <table class="cmdtable">
+          <tr><th>Command</th><th>What it does</th></tr>
+          <tr><td><code>docker system df</code></td><td class="desc">Disk usage broken down by images, containers, volumes, cache</td></tr>
+          <tr><td><code>docker system prune</code></td><td class="desc">Remove stopped containers, dangling images, unused networks</td></tr>
+          <tr><td><code>docker system prune -a --volumes</code></td><td class="desc">Aggressive cleanup — also removes unused images and volumes</td></tr>
+          <tr><td><code>docker builder prune</code></td><td class="desc">Clear the BuildKit build cache specifically</td></tr>
+          <tr><td><code>docker info</code></td><td class="desc">Daemon-level config: storage driver, runtime, resource limits</td></tr>
+          <tr><td><code>docker version</code></td><td class="desc">Client and server (daemon) version, API version</td></tr>
+        </table>
+        <div class="callout warn"><span class="icon">CAUTION</span><p><code>prune -a --volumes</code> deletes anything not currently referenced by a running container — including volumes holding data you meant to keep. Check <code>docker volume ls</code> first.</p></div>
+      </section>
+
+      <!-- 08 COMPOSE -->
+      <section id="cmd-compose">
+        <h2><span class="idx">08</span> Docker Compose</h2>
+        <p class="section-intro">Compose describes a multi-container application declaratively — the closest thing to a Kubernetes manifest for local development.</p>
+        <table class="cmdtable">
+          <tr><th>Command</th><th>What it does</th></tr>
+          <tr><td><code>docker compose up -d</code></td><td class="desc">Build (if needed) and start every service, detached</td></tr>
+          <tr><td><code>docker compose up -d --build</code></td><td class="desc">Force a rebuild before starting</td></tr>
+          <tr><td><code>docker compose down</code></td><td class="desc">Stop and remove containers, networks (keeps named volumes)</td></tr>
+          <tr><td><code>docker compose down -v</code></td><td class="desc">Also remove named volumes — full reset</td></tr>
+          <tr><td><code>docker compose ps</code></td><td class="desc">Status of services defined in this compose project</td></tr>
+          <tr><td><code>docker compose logs -f api</code></td><td class="desc">Tail logs for one service</td></tr>
+          <tr><td><code>docker compose exec api sh</code></td><td class="desc">Shell into a running service</td></tr>
+          <tr><td><code>docker compose config</code></td><td class="desc">Render the final merged config — great for debugging env interpolation</td></tr>
+        </table>
+
+        <h3 class="with-rule">Example: app + database</h3>
+        <div class="code-wrap">
+          <span class="code-label">docker-compose.yml</span>
+          <button class="copy-btn" onclick="copyCode(this)">copy</button>
+<pre><span class="k">services</span>:
+  <span class="k">api</span>:
+    <span class="k">build</span>:
+      <span class="k">context</span>: .
+      <span class="k">target</span>: <span class="s">runtime</span>
+    <span class="k">image</span>: <span class="s">myapp:local</span>
+    <span class="k">ports</span>:
+      - <span class="s">"8080:8080"</span>
+    <span class="k">environment</span>:
+      DATABASE_URL: <span class="s">postgres://app:app@db:5432/appdb</span>
+    <span class="k">depends_on</span>:
+      <span class="k">db</span>:
+        <span class="k">condition</span>: <span class="s">service_healthy</span>
+    <span class="k">healthcheck</span>:
+      <span class="k">test</span>: [<span class="s">"CMD"</span>, <span class="s">"wget"</span>, <span class="s">"-qO-"</span>, <span class="s">"http://localhost:8080/health"</span>]
+      <span class="k">interval</span>: <span class="s">10s</span>
+      <span class="k">timeout</span>: <span class="s">3s</span>
+      <span class="k">retries</span>: <span class="s">5</span>
+
+  <span class="k">db</span>:
+    <span class="k">image</span>: <span class="s">postgres:16-alpine</span>
+    <span class="k">environment</span>:
+      POSTGRES_USER: <span class="s">app</span>
+      POSTGRES_PASSWORD: <span class="s">app</span>
+      POSTGRES_DB: <span class="s">appdb</span>
+    <span class="k">volumes</span>:
+      - <span class="s">pgdata:/var/lib/postgresql/data</span>
+    <span class="k">healthcheck</span>:
+      <span class="k">test</span>: [<span class="s">"CMD-SHELL"</span>, <span class="s">"pg_isready -U app"</span>]
+      <span class="k">interval</span>: <span class="s">5s</span>
+      <span class="k">retries</span>: <span class="s">5</span>
+
+<span class="k">volumes</span>:
+  <span class="k">pgdata</span>:</pre>
+        </div>
+      </section>
+
+      <!-- 09 INSTRUCTIONS -->
+      <section id="instructions">
+        <h2><span class="idx">09</span> Dockerfile instruction reference</h2>
+        <table class="cmdtable">
+          <tr><th>Instruction</th><th>What it does</th></tr>
+          <tr><td><code>FROM</code></td><td class="desc">Base image for the stage — the only instruction that can start a new stage</td></tr>
+          <tr><td><code>ARG</code></td><td class="desc">Build-time-only variable, not present in the final image or a running container</td></tr>
+          <tr><td><code>RUN</code></td><td class="desc">Executes a command and commits the filesystem result as a new layer</td></tr>
+          <tr><td><code>COPY</code></td><td class="desc">Copy files from the build context (or another stage with <code>--from</code>) into the image</td></tr>
+          <tr><td><code>ADD</code></td><td class="desc">Like <code>COPY</code>, plus remote URL fetch and auto-extraction of tarballs — prefer <code>COPY</code> unless you need those</td></tr>
+          <tr><td><code>WORKDIR</code></td><td class="desc">Sets (and creates) the working directory for subsequent instructions</td></tr>
+          <tr><td><code>ENV</code></td><td class="desc">Environment variable baked into the image and every container run from it</td></tr>
+          <tr><td><code>EXPOSE</code></td><td class="desc">Documents the port the app listens on — does not publish it; <code>-p</code> at runtime does that</td></tr>
+          <tr><td><code>USER</code></td><td class="desc">Switches the effective user for subsequent instructions and the running container</td></tr>
+          <tr><td><code>VOLUME</code></td><td class="desc">Declares a mount point Docker should treat as external state</td></tr>
+          <tr><td><code>LABEL</code></td><td class="desc">Key/value metadata — owner, source repo, version — queryable via <code>docker inspect</code></td></tr>
+          <tr><td><code>HEALTHCHECK</code></td><td class="desc">Command Docker runs periodically to decide if the container is "healthy"</td></tr>
+          <tr><td><code>CMD</code></td><td class="desc">Default command for the container — overridden by args passed to <code>docker run</code></td></tr>
+          <tr><td><code>ENTRYPOINT</code></td><td class="desc">Fixed executable for the container; <code>CMD</code> then supplies its default arguments</td></tr>
+          <tr><td><code>SHELL</code></td><td class="desc">Overrides the default shell used for the shell form of <code>RUN</code>/<code>CMD</code>/<code>ENTRYPOINT</code></td></tr>
+          <tr><td><code>ONBUILD</code></td><td class="desc">Registers an instruction to run later, when this image is used as a base for another build</td></tr>
+          <tr><td><code>STOPSIGNAL</code></td><td class="desc">Overrides the signal sent by <code>docker stop</code> (default <code>SIGTERM</code>)</td></tr>
+        </table>
+        <div class="callout tip"><span class="icon">TIP</span><p><code>CMD</code> vs <code>ENTRYPOINT</code>: use <code>ENTRYPOINT ["node","server.js"]</code> when the container should always run that binary, and reserve <code>CMD</code> for default arguments the caller might reasonably override.</p></div>
+      </section>
+
+      <!-- 10 MULTISTAGE CONCEPT -->
+      <section id="multistage-concept">
+        <h2><span class="idx">10</span> Multi-stage builds</h2>
+        <p class="section-intro">A single Dockerfile can contain several <code>FROM</code> blocks, each one a named <strong>stage</strong>. Later stages can <code>COPY --from=&lt;stage&gt;</code> specific artifacts out of earlier ones — compiler, build tools, and source code never make it into the image you actually ship.</p>
+
+        <div class="stageflow">
+          <div class="stage-box"><div class="name">FROM node AS deps</div><div class="role">install packages</div></div>
+          <div class="stage-arrow">→</div>
+          <div class="stage-box"><div class="name">FROM node AS build</div><div class="role">compile / bundle</div></div>
+          <div class="stage-arrow">→</div>
+          <div class="stage-box"><div class="name">FROM distroless AS runtime</div><div class="role">copy artifact only</div></div>
+        </div>
+
+        <p>The payoff is size and attack surface: a Go binary built in a 900MB toolchain image can ship in a scratch or distroless image under 20MB, with no shell, no package manager, no compiler for an attacker to abuse if they land inside the container.</p>
+
+        <div class="callout tip"><span class="icon">TIP</span><p>Stop a build at an intermediate stage for local debugging with <code>docker build --target build -t app:debug .</code> — useful when the final stage is a minimal image with no shell to exec into.</p></div>
+      </section>
+
+      <!-- 11 EXAMPLES -->
+      <section id="examples">
+        <h2><span class="idx">11</span> Production-grade multi-stage Dockerfiles</h2>
+        <p class="section-intro">Three stacks, same discipline throughout: pinned base image digests where it matters, dependency install cached separately from source, a non-root user, and a <code>HEALTHCHECK</code>. Adjust ports/paths to your app.</p>
+
+        <div class="tabs">
+          <button class="tab-btn active" data-tab="node">Node.js</button>
+          <button class="tab-btn" data-tab="python">Python</button>
+          <button class="tab-btn" data-tab="go">Go</button>
+        </div>
+
+        <!-- NODE -->
+        <div class="tab-panel active" id="tab-node">
+          <div class="code-wrap">
+            <span class="code-label">Dockerfile — Node.js / Express, npm build</span>
+            <button class="copy-btn" onclick="copyCode(this)">copy</button>
+<pre><span class="c"># ---- Stage 1: install deps with full lockfile fidelity ----</span>
+<span class="k">FROM</span> node:20.17-alpine3.20 <span class="k">AS</span> deps
+<span class="k">WORKDIR</span> /app
+<span class="k">COPY</span> package.json package-lock.json ./
+<span class="k">RUN</span> npm ci --omit=dev --ignore-scripts
+
+<span class="c"># ---- Stage 2: build (needs devDependencies) ----</span>
+<span class="k">FROM</span> node:20.17-alpine3.20 <span class="k">AS</span> build
+<span class="k">WORKDIR</span> /app
+<span class="k">COPY</span> package.json package-lock.json ./
+<span class="k">RUN</span> npm ci --ignore-scripts
+<span class="k">COPY</span> . .
+<span class="k">RUN</span> npm run build
+
+<span class="c"># ---- Stage 3: minimal runtime ----</span>
+<span class="k">FROM</span> node:20.17-alpine3.20 <span class="k">AS</span> runtime
+<span class="k">ENV</span> NODE_ENV=production
+<span class="k">WORKDIR</span> /app
+
+<span class="c"># non-root user (alpine node images ship a "node" user, uid 1000)</span>
+<span class="k">RUN</span> apk add --no-cache dumb-init
+<span class="k">COPY</span> --from=deps    /app/node_modules ./node_modules
+<span class="k">COPY</span> --from=build    /app/dist          ./dist
+<span class="k">COPY</span> package.json .
+
+<span class="k">USER</span> node
+<span class="k">EXPOSE</span> 8080
+
+<span class="k">HEALTHCHECK</span> --interval=30s --timeout=3s --start-period=5s --retries=3 <span class="f">\</span>
+  <span class="k">CMD</span> node -e <span class="s">"require('http').get('http://localhost:8080/health',r=>process.exit(r.statusCode===200?0:1))"</span>
+
+<span class="k">ENTRYPOINT</span> [<span class="s">"dumb-init"</span>, <span class="s">"--"</span>]
+<span class="k">CMD</span> [<span class="s">"node"</span>, <span class="s">"dist/server.js"</span>]</pre>
+          </div>
+          <div class="callout tip"><span class="icon">TIP</span><p><code>dumb-init</code> as PID 1 fixes zombie-process reaping and correct signal forwarding — Node itself doesn't handle <code>SIGTERM</code>/<code>SIGCHLD</code> as PID 1 gracefully.</p></div>
+        </div>
+
+        <!-- PYTHON -->
+        <div class="tab-panel" id="tab-python">
+          <div class="code-wrap">
+            <span class="code-label">Dockerfile — Python / FastAPI, uv or pip, venv copied across stages</span>
+            <button class="copy-btn" onclick="copyCode(this)">copy</button>
+<pre><span class="c"># ---- Stage 1: build a self-contained virtualenv ----</span>
+<span class="k">FROM</span> python:3.12-slim AS build
+<span class="k">ENV</span> PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+<span class="k">WORKDIR</span> /app
+
+<span class="c"># build deps only exist in this stage, never in runtime</span>
+<span class="k">RUN</span> apt-get update && apt-get install -y --no-install-recommends <span class="f">\</span>
+      build-essential <span class="f">\</span>
+    && rm -rf /var/lib/apt/lists/*
+
+<span class="k">RUN</span> python -m venv /opt/venv
+<span class="k">ENV</span> PATH=<span class="s">"/opt/venv/bin:$PATH"</span>
+
+<span class="k">COPY</span> requirements.txt .
+<span class="k">RUN</span> pip install --no-cache-dir -r requirements.txt
+
+<span class="k">COPY</span> . .
+
+<span class="c"># ---- Stage 2: slim runtime, venv copied in wholesale ----</span>
+<span class="k">FROM</span> python:3.12-slim AS runtime
+<span class="k">ENV</span> PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 <span class="f">\</span>
+    PATH=<span class="s">"/opt/venv/bin:$PATH"</span>
+<span class="k">WORKDIR</span> /app
+
+<span class="k">RUN</span> groupadd -r app && useradd -r -g app -d /app app
+<span class="k">COPY</span> --from=build /opt/venv /opt/venv
+<span class="k">COPY</span> --from=build --chown=app:app /app .
+
+<span class="k">USER</span> app
+<span class="k">EXPOSE</span> 8000
+
+<span class="k">HEALTHCHECK</span> --interval=30s --timeout=3s --start-period=5s --retries=3 <span class="f">\</span>
+  <span class="k">CMD</span> python -c <span class="s">"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health').status==200 else 1)"</span>
+
+<span class="k">CMD</span> [<span class="s">"uvicorn"</span>, <span class="s">"app.main:app"</span>, <span class="s">"--host"</span>, <span class="s">"0.0.0.0"</span>, <span class="s">"--port"</span>, <span class="s">"8000"</span>]</pre>
+          </div>
+          <div class="callout tip"><span class="icon">TIP</span><p>Copying the whole <code>/opt/venv</code> across stages avoids reinstalling <code>build-essential</code> in the runtime image — compiled wheels come along for free, gcc doesn't.</p></div>
+        </div>
+
+        <!-- GO -->
+        <div class="tab-panel" id="tab-go">
+          <div class="code-wrap">
+            <span class="code-label">Dockerfile — Go, static binary into a distroless runtime</span>
+            <button class="copy-btn" onclick="copyCode(this)">copy</button>
+<pre><span class="c"># ---- Stage 1: build a fully static binary ----</span>
+<span class="k">FROM</span> golang:1.23-alpine AS build
+<span class="k">WORKDIR</span> /src
+
+<span class="c"># cache module downloads separately from source changes</span>
+<span class="k">COPY</span> go.mod go.sum ./
+<span class="k">RUN</span> go mod download
+
+<span class="k">COPY</span> . .
+<span class="k">RUN</span> CGO_ENABLED=0 GOOS=linux GOARCH=amd64 <span class="f">\</span>
+    go build -ldflags=<span class="s">"-s -w"</span> -o /out/server ./cmd/server
+
+<span class="c"># ---- Stage 2: distroless — no shell, no package manager ----</span>
+<span class="k">FROM</span> gcr.io/distroless/static-debian12:nonroot AS runtime
+<span class="k">WORKDIR</span> /app
+<span class="k">COPY</span> --from=build /out/server .
+
+<span class="c"># distroless "nonroot" image already runs as uid 65532</span>
+<span class="k">USER</span> nonroot:nonroot
+<span class="k">EXPOSE</span> 8080
+
+<span class="k">ENTRYPOINT</span> [<span class="s">"/app/server"</span>]</pre>
+          </div>
+          <div class="callout warn"><span class="icon">CAUTION</span><p>Distroless has no shell, so <code>HEALTHCHECK CMD</code> and <code>docker exec ... sh</code> won't work here. Build health checks into the app itself and rely on your orchestrator's (k8s) HTTP liveness/readiness probes instead.</p></div>
+        </div>
+      </section>
+
+      <!-- 12 DOCKERIGNORE -->
+      <section id="dockerignore">
+        <h2><span class="idx">12</span> .dockerignore</h2>
+        <p class="section-intro">Excluded paths never enter the build context, which means faster <code>docker build</code> uploads, smaller layer-cache invalidation surface, and no accidental secrets baked into an image.</p>
+        <div class="code-wrap">
+          <span class="code-label">.dockerignore</span>
+          <button class="copy-btn" onclick="copyCode(this)">copy</button>
+<pre><span class="c"># VCS & CI</span>
+.git
+.github
+
+<span class="c"># dependencies (reinstalled inside the build)</span>
+node_modules
+__pycache__
+*.pyc
+.venv
+
+<span class="c"># local env & secrets — never let these into an image</span>
+.env
+.env.*
+*.pem
+*.key
+
+<span class="c"># build artifacts / editor / OS noise</span>
+dist
+build
+*.log
+.DS_Store
+.vscode
+.idea
+
+<span class="c"># tests & docs — usually not needed in the runtime image</span>
+tests
+docs
+README.md</pre>
+        </div>
+      </section>
+
+      <!-- 13 CHECKLIST -->
+      <section id="checklist">
+        <h2><span class="idx">13</span> Production hardening checklist</h2>
+        <ul class="checklist">
+          <li>Pin base image tags (and digests for anything security-sensitive) — never build <code>FROM node:latest</code> in CI</li>
+          <li>Run as a non-root <code>USER</code> — most CIS/Pod Security Standard scanners fail a build without one</li>
+          <li>Order instructions so dependency manifests are copied and installed before the rest of the source, to preserve layer cache</li>
+          <li>Use multi-stage builds so compilers, dev dependencies, and source never reach the final image</li>
+          <li>Prefer a minimal base — alpine, slim, or distroless — over a full OS image</li>
+          <li>Add a <code>.dockerignore</code> before the first build, not after a secret leaks into a layer</li>
+          <li>Set explicit resource-aware defaults; let Kubernetes requests/limits be the real ceiling in a cluster</li>
+          <li>Add a <code>HEALTHCHECK</code> (or, in k8s, liveness/readiness probes) instead of assuming "running" means "ready"</li>
+          <li>Scan images in CI — <code>docker scout</code>, Trivy, or Grype — before they ever reach a registry</li>
+          <li>Sign and generate an SBOM for anything that ships to production (<code>docker buildx build --sbom=true --provenance=true</code>)</li>
+          <li>Never bake secrets in with <code>ENV</code> or <code>ARG</code> — use BuildKit's <code>--secret</code> mount or inject at runtime</li>
+        </ul>
+        <div class="code-wrap">
+          <span class="code-label">BuildKit secret mount — no secret in any layer, ever</span>
+          <button class="copy-btn" onclick="copyCode(this)">copy</button>
+<pre><span class="c"># Dockerfile</span>
+<span class="k">RUN</span> --mount=type=secret,id=npmrc,target=/root/.npmrc <span class="f">\</span>
+    npm ci --omit=dev
+
+<span class="c"># build command</span>
+docker build --secret id=npmrc,src=$HOME/.npmrc -t app .</pre>
+        </div>
+      </section>
+
+      <!-- 14 BUILDX -->
+      <section id="buildx">
+        <h2><span class="idx">14</span> Buildx, cache & multi-arch</h2>
+        <p class="section-intro">Modern Docker builds run on BuildKit by default; <code>buildx</code> is the CLI front-end for its extra capabilities — remote cache, multi-platform output, SBOM/provenance attestations.</p>
+        <table class="cmdtable">
+          <tr><th>Command</th><th>What it does</th></tr>
+          <tr><td><code>docker buildx create --use</code></td><td class="desc">Create and switch to a new builder instance (needed for multi-platform builds)</td></tr>
+          <tr><td><code>docker buildx build --platform linux/amd64,linux/arm64 -t app:1.0 --push .</code></td><td class="desc">Build and push one manifest covering both architectures — essential if your nodes mix Graviton/ARM and amd64</td></tr>
+          <tr><td><code>docker buildx build --cache-to=type=registry,ref=myrepo/app:cache --cache-from=type=registry,ref=myrepo/app:cache .</code></td><td class="desc">Persist layer cache in a registry so CI runners share it across jobs</td></tr>
+          <tr><td><code>docker buildx bake</code></td><td class="desc">Build several related targets/platforms from one declarative <code>docker-bake.hcl</code> file</td></tr>
+          <tr><td><code>docker buildx build --sbom=true --provenance=true .</code></td><td class="desc">Attach a software bill of materials and build provenance attestation to the image</td></tr>
+        </table>
+        <div class="callout tip"><span class="icon">TIP</span><p>In GitHub Actions, pair <code>docker/setup-buildx-action</code> with <code>cache-from: type=gha</code> / <code>cache-to: type=gha,mode=max</code> — no registry round-trip needed for cache.</p></div>
+      </section>
+
+      <div class="footnote">Docker field manual — build once, ship the same artifact everywhere.</div>
+    </div>
+  </main>
+</div>
+
+<script>
+// Copy-to-clipboard
+function copyCode(btn){
+  const pre = btn.parentElement.querySelector('pre');
+  const text = pre.innerText;
+  navigator.clipboard.writeText(text).then(()=>{
+    btn.textContent = 'copied';
+    btn.classList.add('copied');
+    setTimeout(()=>{ btn.textContent='copy'; btn.classList.remove('copied'); }, 1500);
+  });
+}
+
+// Tab switching (multi-stage examples)
+document.querySelectorAll('.tab-btn').forEach(btn=>{
+  btn.addEventListener('click', ()=>{
+    const tab = btn.dataset.tab;
+    btn.parentElement.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
+    btn.classList.add('active');
+    const panelGroup = btn.closest('section').querySelectorAll('.tab-panel');
+    panelGroup.forEach(p=>p.classList.remove('active'));
+    document.getElementById('tab-'+tab).classList.add('active');
+  });
+});
+
+// Sidebar nav: scroll-to + active state
+const navlinks = document.querySelectorAll('.navlink');
+navlinks.forEach(link=>{
+  link.addEventListener('click', ()=>{
+    const target = document.getElementById(link.dataset.target);
+    if(target){ target.scrollIntoView({behavior:'smooth', block:'start'}); }
+    if(window.innerWidth <= 880){ document.querySelector('.sidebar').classList.remove('open'); }
+  });
+});
+
+const sections = document.querySelectorAll('section[id]');
+const spy = new IntersectionObserver((entries)=>{
+  entries.forEach(entry=>{
+    if(entry.isIntersecting){
+      navlinks.forEach(l=>l.classList.remove('active'));
+      const active = document.querySelector('.navlink[data-target="'+entry.target.id+'"]');
+      if(active) active.classList.add('active');
+    }
+  });
+}, {rootMargin:'-15% 0px -70% 0px'});
+sections.forEach(s=>spy.observe(s));
+</script>
+</body>
+</html>
