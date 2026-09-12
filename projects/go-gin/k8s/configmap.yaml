@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: user-api-config
+  namespace: user-api
+data:
+  GIN_MODE: "release"
+  PORT: "8090"
+  DB_HOST: "user-db-svc"
+  DB_PORT: "5432"
+  DB_NAME: "usersdb"

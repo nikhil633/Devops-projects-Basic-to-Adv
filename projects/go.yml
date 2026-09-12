@@ -1,0 +1,155 @@
+# <!-- Kodekloud CI pipeline  -->
+name: Go CI
+
+on:
+  push:
+    paths:
+      - 'go-gin/**'
+  pull_request:
+    paths:
+      - 'go-gin/**'
+
+jobs:
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Docker build
+      run: echo docker build -t docker.io/$dockerUsername/imagename:latest
+    - name: Docker login
+      run: echo docker login --username=$dockerUsername --password= ${{ secrets.DOCKER_PASSWORD }}
+    - name: Docker publish
+      run: echo docker push docker.io/$dockerUsername/imagename:latest 
+
+  deploy:
+    needs: docker
+    runs-on: ubuntu-latest
+    steps:
+    - name: Docker run
+      run: echo docker run -d -p 8080:80 docker.io/$dockerUsername/imagename:latest
+
+
+
+# name: Go CI
+
+# on:
+#   push:
+#     paths:
+#       - 'go-gin/**'
+#   pull_request:
+#     paths:
+#       - 'go-gin/**'
+
+# jobs:
+#   docker:
+#     runs-on: ubuntu-latest
+#     steps:
+#       - uses: actions/checkout@v4
+
+#       - name: Docker build
+#         run: docker build -t docker.io/${{ secrets.DOCKER_USERNAME }}/github-actions:latest ./go-gin
+
+#       - name: Docker login
+#         run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
+
+#       - name: Docker push
+#         run: docker push docker.io/${{ secrets.DOCKER_USERNAME }}/github-actions:latest
+
+#   deploy:
+#     needs: docker
+#     runs-on: ubuntu-latest
+#     steps:
+#       - name: Docker run (temporary test)
+#         run: docker run -d -p 8080:80 docker.io/${{ secrets.DOCKER_USERNAME }}/github-actions:latest
+
+# name: Go CI
+
+# on:
+#   push:
+#     paths:
+#       - 'go-gin/**'
+#   pull_request:
+#     paths:
+#       - 'go-gin/**'
+
+# jobs:
+#   first-job:
+#     name: unit-testing
+#     strategy:
+#         matrix:
+#           os: [ubuntu-latest]
+#           cmd: [test]
+#     runs-on: ${{matrix.os}}
+#     steps:
+#       - name: Checkout
+#         uses: actions/checkout@v5
+#       - name: list files
+#         run: ls
+#       - name: Welcome message
+#         run: |
+#           echo "My first project"
+#           ls -ltra
+#           cat README.md
+        
+#       - name: Install Cowsay Program
+#         run: sudo apt-get install cowsay -y
+
+#       - name: Generate ASCII Artwork
+#         run: cowsay -f dragon "Run for cover, I am a Dragon......RAWR" >> dragon.txt
+        
+#       - name: Test File exists
+#         run: grep -i "dragon" dragon.txt
+
+
+#   - name: Upload file
+      # uses: actions/upload-artifact@v5
+      # with:
+      #   name: dragon-file
+      #   path: dragon.txt 
+
+
+#   - name: Download file
+      # uses: actions/Download-artifact@v5
+      # with:
+      #   name: dragon-file
+      #   path: dragon.txt 
+
+  # first-job:
+  #   name: unit-testing
+  #   strategy:
+  #       matrix:
+  #         os: [ubuntu-latest]
+  #         cmd: [test]
+  #   runs-on: ${{matrix.os}}
+  #   steps:
+  #     - name: list files
+  #       run: ls
+  #     - name: Welcome message
+  #       run: |
+  #         echo "My first project"
+  #         ls -ltra
+  #         cat README.md
+        
+  #     - name: Install Cowsay Program
+  #       run: sudo apt-get install cowsay -y
+
+  #     - name: Generate ASCII Artwork
+  #       run: cowsay -f dragon "Run for cover, I am a Dragon......RAWR" >> dragon.txt
+        
+  #     - name: Test File exists
+  #       run: grep -i "dragon" dragon.txt
+
+  #     - name: Checkout
+  #       uses: actions/checkout@v5
+
+  #     - name: install Nodejs - ${{ matrix.os}}
+  #       uses: actions/setup-node@v5
+  #       with:
+  #         node-version: 20
+
+  #     - name: install Dependencies
+  #       run: npm install
+
+  #     - name: Run Unit tests
+  #       run: npm test
+        
+

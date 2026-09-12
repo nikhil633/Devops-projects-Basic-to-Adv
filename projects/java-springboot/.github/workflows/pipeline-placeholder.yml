@@ -1,0 +1,11 @@
+# Pipeline placeholder — build your GitHub Actions here!
+# Suggested jobs:
+# 1. build-test      → mvn verify (unit + integration tests)
+# 2. security-scan   → Trivy (fs), OWASP dependency-check, Snyk
+# 3. terraform       → plan on PR, apply on merge to main
+# 4. docker-build    → multi-stage build, push to ACR (OIDC)
+# 5. trivy-image     → scan final image for CVEs
+# 6. deploy-aks      → kubectl apply k8s/
+# 7. smoke-test      → curl /health + /actuator/health
+#
+# Note: JVM startup is slow — set initialDelaySeconds=60 for probes

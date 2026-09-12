@@ -1,0 +1,11 @@
+# Pipeline placeholder — build your GitHub Actions here!
+# Suggested jobs:
+# 1. lint-test      → golangci-lint, go test ./... -race -cover
+# 2. security-scan  → Trivy (fs), govulncheck, Snyk
+# 3. terraform      → plan on PR, apply on merge to main
+# 4. docker-build   → scratch-based image, push to ACR (OIDC)
+# 5. trivy-image    → scan tiny Go image for CVEs
+# 6. deploy-aks     → kubectl apply k8s/
+# 7. smoke-test     → curl /health
+#
+# Tip: Go builds to a static binary — scratch image = minimal attack surface

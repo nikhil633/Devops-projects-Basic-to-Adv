@@ -1,0 +1,9 @@
+# Pipeline placeholder — build your GitHub Actions here!
+#  Suggested jobs:
+# 1. lint-test      → eslint, jest --coverage
+# 2. security-scan  → Trivy (fs), npm audit, Snyk
+# 3. terraform      → plan on PR, apply on merge
+# 4. docker-build   → build + push to ACR (OIDC)
+# 5. trivy-image    → scan built image
+# 6. deploy-aks     → kubectl apply k8s/
+# 7. smoke-test     → curl /health

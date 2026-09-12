@@ -1,0 +1,25 @@
+{
+  "name": "order-api",
+  "version": "1.0.0",
+  "description": "Order management REST API with Express + MongoDB",
+  "main": "src/app.js",
+  "scripts": {
+    "start": "node src/app.js",
+    "dev": "nodemon src/app.js",
+    "test": "jest --coverage",
+    "lint": "eslint src/"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "mongoose": "^8.4.0"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0",
+    "supertest": "^7.0.0",
+    "nodemon": "^3.1.0",
+    "eslint": "^9.5.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

@@ -1,0 +1,20 @@
+# ─── PIPELINE PLACEHOLDER ───────────────────────────────────────────────
+# Build your GitHub Actions pipeline here!
+# Suggested jobs:
+#
+# 1. lint-test       → flake8, pytest
+# 2. security-scan   → Trivy (filesystem), Snyk (dependencies)
+# 3. terraform-plan  → on PR
+# 4. terraform-apply → on merge to main
+# 5. docker-build    → multi-stage, push to ACR
+# 6. trivy-image     → scan the built image
+# 7. deploy-aks      → kubectl apply k8s/
+# 8. smoke-test      → curl /health endpoint
+#
+# Tip: Use OIDC (azure/login) — no stored credentials needed
+# name: CI/CD Pipeline
+# on:
+#   push:
+#     branches: [main]
+#   pull_request:
+#     branches: [main]

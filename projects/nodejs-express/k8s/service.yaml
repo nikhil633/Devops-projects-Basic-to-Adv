@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: order-api-svc
+  namespace: order-api
+spec:
+  selector:
+    app: order-api
+  ports:
+    - port: 80
+      targetPort: 3000
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: order-db-svc
+  namespace: order-api
+spec:
+  selector:
+    app: order-db
+  ports:
+    - port: 27017
+      targetPort: 27017
+  type: ClusterIP
