@@ -105,6 +105,15 @@ gcloud compute instances stop vault --zone=us-central1-a
 gcloud compute instances start vault --zone=us-central1-a
 gcloud compute instances delete vault --zone=us-central1-a
 
+gcloud compute ssh temp --zone=us-central1-a
+gcloud compute instances stop temp --zone=us-central1-a
+gcloud compute instances start temp --zone=us-central1-a
+gcloud compute instances delete temp --zone=us-central1-a
+
+gcloud compute instances create temp --zone=us-central1-a --machine-type=e2-standard-4 --image-family=ubuntu-2204-lts --image-project=ubuntu-os-cloud --boot-disk-size=20GB --enable-nested-virtualization
+
+
+
 gcloud compute ssh k8s-dev-vm --zone=us-central1-a
 gcloud compute instances delete k8s-dev-vm --zone=us-central1-a
 gcloud compute instances create k8s-dev-vm --zone=us-central1-a --machine-type=e2-standard-4 --image-family=ubuntu-2204-lts --image-project=ubuntu-os-cloud --boot-disk-size=50GB --enable-nested-virtualization
